@@ -24,7 +24,7 @@ class DateRotatingFileHandler(RotatingFileHandler):
             self.stream = self._open()
 
 
-# Configure trader logger
+# Configure trader logger spot
 trader_logger = logging.getLogger('trader_logger')
 if not trader_logger.hasHandlers():
     trader_logger.setLevel(logging.DEBUG)
