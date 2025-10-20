@@ -2,7 +2,7 @@ import subprocess
 import time
 
 # List of scripts to run
-scripts = ["telegram.py", "main.py"]
+scripts = ["app/futures_perps/main.py"]
 # scripts = ["TelegramBot.py", "live_trade.py",  "signals.py", "tradegainers_auto.py"]
 
 # Function to run a script

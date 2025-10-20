@@ -32,7 +32,7 @@ MIN_PRICE_FILTER = 0.001
 MAX_PRICE_FILTER = 500_000
 MAX_SPREAD_PCT = 0.008     # keep tight spread (good for scalping)
 MIN_DEPTH_USDC = 100        # ↓ from 200
-MIN_VOLUME_5M = 1_000       # ↓ from 50,000
+MIN_VOLUME_5M = 300       # ↓ from 50,000
 MAX_VOLATILITY_5M = 0.03    # ↑ from 0.03 (5% in 5m is normal)
 
 if not all([BASE_URL, ORDERLY_ACCOUNT_ID, ORDERLY_SECRET, ORDERLY_PUBLIC_KEY]):
@@ -248,7 +248,7 @@ def fetch_symbol_liquidity(symbol: str) -> Optional[Dict]:
             print(f"[{symbol}] ❌ Kline parse error: {e}")
             return None
 
-        print(f"[{symbol}] 5m → Vol: ${quote_volume:,.0f}, Volatility: {volatility*100:.2f}%")
+        # print(f"[{symbol}] 5m → Vol: ${quote_volume:,.0f}, Volatility: {volatility*100:.2f}%")
 
         if quote_volume < MIN_VOLUME_5M:
             return None
@@ -303,7 +303,7 @@ def get_top_liquidity_symbols(top_n: int = 20, use_redis: bool = True) -> List[s
             pass
 
     candidates = get_scalping_candidates()
-    print(f"🔍 Evaluating liquidity for {len(candidates)} candidates")
+    # print(f"🔍 Evaluating liquidity for {len(candidates)} candidates")
     if not candidates:
         return []
 

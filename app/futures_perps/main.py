@@ -43,7 +43,11 @@ def scan_for_scalp_opportunities():
         all_symbols = liquid_symbols | set(gainers) | set(losers)
         candidates = sorted(all_symbols)
 
-        logging.info(f"🎯 Scanning {len(candidates)} unique candidates")
+        # print candidates length and candidates
+        logging.info(f"🎯 Scanning {len(candidates)} unique candidates...{candidates}")
+        # logs gainers and losers
+        logging.info(f"📈 Gainers: {gainers}")
+        logging.info(f"📉 Losers: {losers}")
 
         signals = []
         for symbol in candidates:

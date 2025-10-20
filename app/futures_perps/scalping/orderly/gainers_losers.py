@@ -202,14 +202,14 @@ def get_top_gainers_losers(
     ))
 
 # # Test function (unchanged)
-# if __name__ == "__main__":
-#     async def test():
-#         gainers, losers = await get_top_gainers_losers_orderly(top_n=30)
-#         print(f"📈 Top Gainers ({len(gainers)}):")
-#         for g in gainers:
-#             print(f"  - {g}")
-#         print(f"📉 Top Losers ({len(losers)}):")
-#         for l in losers:
-#             print(f"  - {l}")
+if __name__ == "__main__":
+    async def test():
+        gainers, losers = await get_top_gainers_losers_orderly(top_n=30)
+        print(f"📈 Top Gainers ({len(gainers)}):")
+        for g in gainers:
+            print(f"  - {g}")
+        print(f"📉 Top Losers ({len(losers)}):")
+        for l in losers:
+            print(f"  - {l}")
     
-#     asyncio.run(test())
+    asyncio.run(test())
