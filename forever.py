@@ -1,31 +1,77 @@
 import subprocess
 import time
+import sys
+import os
+from datetime import datetime
 
-# List of scripts to run
-scripts = ["app/futures_perps/main.py"]
-# scripts = ["TelegramBot.py", "live_trade.py",  "signals.py", "tradegainers_auto.py"]
+# List of scripts to run (relative to project root)
+scripts = [
+    "futures_perps/scalping/orderly/main.py",
+    "futures_perps/scalping/binance/main.py"
+]
 
-# Function to run a script
-def run_script(script):
-    return subprocess.Popen(["python3", script])
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
+    sys.stdout.flush()  # Ensure logs appear in real-time (e.g., in Docker)
 
-# Dictionary to keep track of running processes
-processes = {}
+def run_script(script_path):
+    """Start a script as a subprocess."""
+    log(f"🚀 Starting {script_path}")
+    # Use 'python' instead of 'python3' for broader compatibility
+    return subprocess.Popen(
+        [sys.executable, script_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        bufsize=1  # Line-buffered
+    )
 
-# Start all scripts
-for script in scripts:
-    processes[script] = run_script(script)
+def main():
+    processes = {}
 
-# Monitor the scripts and restart if any of them stop
-try:
-    while True:
-        for script, process in processes.items():
-            # print(f"Checking {script}...")
-            if process.poll() is not None:  # Process has terminated
-                print(f"{script} has stopped. Restarting...")
-                processes[script] = run_script(script)
-        time.sleep(30)  # Check every 5 seconds
-except KeyboardInterrupt:
-    print("Stopping all scripts...")
-    for process in processes.values():
-        process.terminate()
+    # Start all scripts
+    for script in scripts:
+        if not os.path.exists(script):
+            log(f"❌ Script not found: {script} — skipping!")
+            continue
+        processes[script] = run_script(script)
+
+    log(f"✅ Supervisor started with {len(processes)} bots.")
+
+    try:
+        while True:
+            for script, proc in list(processes.items()):
+                if proc.poll() is not None:  # Process exited
+                    return_code = proc.returncode
+                    log(f"⚠️ {script} exited with code {return_code}. Restarting in 3s...")
+                    
+                    # Optional: read last few lines of output for debugging
+                    try:
+                        output = proc.stdout.read() if proc.stdout else ""
+                        if output:
+                            last_lines = output.strip().split('\n')[-3:]
+                            for line in last_lines:
+                                log(f"   [LOG] {line}")
+                    except Exception as e:
+                        log(f"   Failed to read logs: {e}")
+
+                    time.sleep(3)
+                    processes[script] = run_script(script)
+
+            time.sleep(3)  # Check every 3 seconds
+
+    except KeyboardInterrupt:
+        log("🛑 Received SIGINT. Shutting down all bots...")
+        for proc in processes.values():
+            proc.terminate()
+        for proc in processes.values():
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        log("✅ All bots stopped.")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()

@@ -361,5 +361,5 @@ def print_liquidity_report(top_n: int = 15):
     print("=" * 80)
 
 # === Run ===
-# if __name__ == "__main__":
-#     symbols = print_liquidity_report(20)
+if __name__ == "__main__":
+    symbols = print_liquidity_report(20)

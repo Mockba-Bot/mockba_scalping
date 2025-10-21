@@ -1,5 +1,5 @@
 import os
-from .utils import get_orderbook, get_recent_trades, calc_spread_pct, has_sufficient_depth
+from utils import get_orderbook, get_recent_trades, calc_spread_pct, has_sufficient_depth
 from typing import Optional, Dict, List
 import time
 import numpy as np
@@ -75,9 +75,14 @@ def calculate_net_profit(entry_price: float, exit_price: float, side: str) -> fl
     
     return net_profit
 
-def detect_liquidity_sweep(symbol: str, lookback_sec: int = 120) -> Optional[Dict]:
+def detect_liquidity_sweep(symbol: str, lookback_sec: int = 60) -> Optional[Dict]:
+    """
+    Detects aggressive liquidity sweeps in the direction of momentum.
+    Optimized for tight-spread, low-volatility markets.
+    """
     try:
-        trades = get_recent_trades(symbol, minutes=lookback_sec // 60 + 1)
+        # Fetch recent trades (last 60s)
+        trades = get_recent_trades(symbol, minutes=2)  # buffer for timing
         if len(trades) < MIN_TRADES_FOR_ANALYSIS:
             return None
 
@@ -89,107 +94,123 @@ def detect_liquidity_sweep(symbol: str, lookback_sec: int = 120) -> Optional[Dic
         if len(recent_trades) < 5:
             return None
 
-        prices = [float(t['price']) for t in recent_trades]
-        volumes = [float(t['qty']) for t in recent_trades]
-
+        # Calculate fair price (VWAP + median blend)
         fair_price = get_cached_fair_price(symbol, recent_trades)
         if fair_price == 0:
             return None
 
-        ob = get_orderbook(symbol, limit=3)
-        if not ob.get('bids') or not ob.get('asks') or len(ob['bids']) < 1 or len(ob['asks']) < 1:
+        # Get order book (top 5 levels)
+        ob = get_orderbook(symbol, limit=5)
+        if not ob.get('bids') or not ob.get('asks'):
             return None
 
         best_bid = float(ob['bids'][0][0])
         best_ask = float(ob['asks'][0][0])
 
+        # Check spread
         spread_pct = calc_spread_pct(symbol)
         if spread_pct > MAX_SPREAD_PCT:
             return None
-            
+
+        # Check depth (ensure we can enter/exit)
         if not has_sufficient_depth(symbol, min_usdt_depth=500):
             return None
 
-        if len(volumes) >= 5:
-            avg_volume = sum(volumes[-5:]) / 5
-        else:
-            avg_volume = sum(volumes) / len(volumes) if volumes else 0
+        # Use last 10 trades for momentum
+        last_trades = recent_trades[-10:]
+        prices = [float(t['price']) for t in last_trades]
+        volumes = [float(t['qty']) for t in last_trades]
 
-        recent_trades_to_analyze = recent_trades[-5:]
-        signal_data = None
+        if not prices:
+            return None
 
-        for trade in reversed(recent_trades_to_analyze):
-            trade_price = float(trade['price'])
-            trade_volume = float(trade['qty'])
-            
-            volume_ratio = trade_volume / avg_volume if avg_volume > 0 else 0
-            vol_spike = volume_ratio >= VOLUME_SPIKE_MULTIPLIER
+        current_price = prices[-1]
+        price_displacement = (current_price - fair_price) / fair_price
 
-            if not vol_spike:
-                continue
+        # Determine sweep direction
+        is_buy_sweep = price_displacement > SWEEP_THRESHOLD_PCT
+        is_sell_sweep = price_displacement < -SWEEP_THRESHOLD_PCT
 
-            if trade_price > fair_price * (1 + SWEEP_THRESHOLD_PCT):
-                if best_bid < trade_price * (1 - PULLBACK_CONFIRM_PCT):
-                    stop_loss = trade_price * (1 + PULLBACK_CONFIRM_PCT * 1.2)
-                    take_profit = best_bid * (1 - TP_PCT)
-                    
-                    risk = stop_loss - best_bid
-                    reward = best_bid - take_profit
-                    risk_reward_ratio = reward / risk if risk > 0 else 0
-                    
-                    net_profit_pct = calculate_net_profit(best_bid, take_profit, 'sell')
-                    
-                    if risk_reward_ratio >= 1.2 and net_profit_pct >= 0.0010:
-                        signal_data = {
-                            "symbol": symbol,
-                            "side": "sell",
-                            "entry": best_bid,
-                            "stop_loss": stop_loss,
-                            "take_profit": take_profit,
-                            "confidence": min(volume_ratio * 0.7, 4.0),
-                            "risk_reward_ratio": round(risk_reward_ratio, 2),
-                            "net_profit_pct": round(net_profit_pct * 100, 4),
-                            "sweep_price": trade_price,
-                            "fair_price": fair_price,
-                            "volume_ratio": volume_ratio,
-                            "timestamp": time.time()
-                        }
-                        break
+        if not (is_buy_sweep or is_sell_sweep):
+            return None
 
-            elif trade_price < fair_price * (1 - SWEEP_THRESHOLD_PCT):
-                if best_ask > trade_price * (1 + PULLBACK_CONFIRM_PCT):
-                    stop_loss = trade_price * (1 - PULLBACK_CONFIRM_PCT * 1.2)
-                    take_profit = best_ask * (1 + TP_PCT)
-                    
-                    risk = best_ask - stop_loss
-                    reward = take_profit - best_ask
-                    risk_reward_ratio = reward / risk if risk > 0 else 0
-                    
-                    net_profit_pct = calculate_net_profit(best_ask, take_profit, 'buy')
-                    
-                    if risk_reward_ratio >= 1.2 and net_profit_pct >= 0.0010:
-                        signal_data = {
-                            "symbol": symbol,
-                            "side": "buy",
-                            "entry": best_ask,
-                            "stop_loss": stop_loss,
-                            "take_profit": take_profit,
-                            "confidence": min(volume_ratio * 0.7, 4.0),
-                            "risk_reward_ratio": round(risk_reward_ratio, 2),
-                            "net_profit_pct": round(net_profit_pct * 100, 4),
-                            "sweep_price": trade_price,
-                            "fair_price": fair_price,
-                            "volume_ratio": volume_ratio,
-                            "timestamp": time.time()
-                        }
-                        break
+        # Volume confirmation: last trade must be >= avg of last 5
+        avg_vol = sum(volumes[-5:]) / len(volumes[-5:]) if volumes else 1
+        last_vol = volumes[-1] if volumes else 0
+        volume_ratio = last_vol / avg_vol if avg_vol > 0 else 0
 
-        if signal_data and signal_data['confidence'] >= MIN_CONFIDENCE:
+        if volume_ratio < VOLUME_SPIKE_MULTIPLIER:
+            return None
+
+        # Confidence based on displacement + volume
+        displacement_score = abs(price_displacement) / SWEEP_THRESHOLD_PCT
+        confidence = min((displacement_score * 0.6 + volume_ratio * 0.4), 4.0)
+
+        # Signal generation
+        if is_buy_sweep:
+            entry = best_ask  # enter on ask (aggressive buy)
+            stop_loss = entry * (1 - SWEEP_THRESHOLD_PCT * 1.5)
+            take_profit = entry * (1 + TP_PCT)
+
+            risk = entry - stop_loss
+            reward = take_profit - entry
+            risk_reward_ratio = reward / risk if risk > 0 else 0
+            net_profit_pct = calculate_net_profit(entry, take_profit, 'buy')
+
+            if risk_reward_ratio < 1.0 or net_profit_pct < 0.0010:
+                return None
+
+            signal_data = {
+                "symbol": symbol,
+                "side": "buy",
+                "entry": entry,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "confidence": confidence,
+                "risk_reward_ratio": round(risk_reward_ratio, 2),
+                "net_profit_pct": round(net_profit_pct * 100, 4),
+                "sweep_price": current_price,
+                "fair_price": fair_price,
+                "volume_ratio": volume_ratio,
+                "timestamp": time.time()
+            }
+
+        elif is_sell_sweep:
+            entry = best_bid  # enter on bid (aggressive sell)
+            stop_loss = entry * (1 + SWEEP_THRESHOLD_PCT * 1.5)
+            take_profit = entry * (1 - TP_PCT)
+
+            risk = stop_loss - entry
+            reward = entry - take_profit
+            risk_reward_ratio = reward / risk if risk > 0 else 0
+            net_profit_pct = calculate_net_profit(entry, take_profit, 'sell')
+
+            if risk_reward_ratio < 1.0 or net_profit_pct < 0.0010:
+                return None
+
+            signal_data = {
+                "symbol": symbol,
+                "side": "sell",
+                "entry": entry,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "confidence": confidence,
+                "risk_reward_ratio": round(risk_reward_ratio, 2),
+                "net_profit_pct": round(net_profit_pct * 100, 4),
+                "sweep_price": current_price,
+                "fair_price": fair_price,
+                "volume_ratio": volume_ratio,
+                "timestamp": time.time()
+            }
+
+        # Final confidence gate
+        if signal_data['confidence'] >= MIN_CONFIDENCE:
             return signal_data
 
         return None
 
     except Exception as e:
+        # For debugging, you may temporarily log e
         return None
 
 def enhanced_sweep_detection(symbol: str, lookback_sec: int = 120) -> Optional[Dict]:
