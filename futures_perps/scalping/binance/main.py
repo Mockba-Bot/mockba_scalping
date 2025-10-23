@@ -84,6 +84,16 @@ def update_position_from_binance(position_id: int, db_row: dict):
                 update_position_pnl(position_id, pnl_pct, pnl_usd, status='TP')
             elif sl_info['status'] == 'FILLED':
                 update_position_pnl(position_id, pnl_pct, pnl_usd, status='SL')
+
+            # Return payload for notification purposes
+            return {
+                'symbol': db_row['symbol'],
+                'side': db_row['side'],
+                'fill_price': fill_price,
+                'current_price': current_price,
+                'pnl_pct': pnl_pct,
+                'pnl_usd': pnl_usd
+            }        
                 
     except Exception as e:
         binance.error(f"Error updating position {position_id}: {e}")
@@ -100,7 +110,23 @@ def position_monitor_loop():
                 binance.debug(f"Monitoring {len(open_positions)} open positions")
                 
                 for pos in open_positions:
-                    update_position_from_binance(pos['id'], pos)
+                    closed_info = update_position_from_binance(pos['id'], pos)
+                    if closed_info:
+                         # 📢 Send closure alert
+                        emoji = "🟢" if closed_info['pnl_usd'] >= 0 else "🔴"
+                        message = (
+                            f"{emoji} POSITION UPDATE on BINANCE\n"
+                            f"Symbol: {closed_info['symbol']}\n"
+                            f"Side: {closed_info['side'].upper()}\n"
+                            f"Fill Price: {closed_info['fill_price']:.4f}\n"
+                            f"Current Price: {closed_info['current_price']:.4f}\n"
+                            f"PnL: {closed_info['pnl_pct']:.2f}% | ${closed_info['pnl_usd']:.2f}"
+                        )
+                        # send bot message to all chats
+                        chat_statuses = get_all_signal_statuses()
+                        for status in chat_statuses:
+                            send_bot_message(status['chat_id'], message)
+
                     time.sleep(0.1)  # Respect Binance rate limits (10 req/sec)
                 
             time.sleep(2)  # Check every 2 seconds when no positions
@@ -267,7 +293,7 @@ def main_loop_binance(interval_seconds: int = 5):
 if __name__ == "__main__":
     # 1. Initialize DB schema
     initialize_database_tables()
-    
+
     # Start position monitor in background thread
     monitor_thread = threading.Thread(
         target=position_monitor_loop,
