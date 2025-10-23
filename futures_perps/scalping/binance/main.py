@@ -128,9 +128,9 @@ def position_monitor_loop():
                             send_bot_message(status['chat_id'], message)
 
                     time.sleep(0.1)  # Respect Binance rate limits (10 req/sec)
-                
-            time.sleep(2)  # Check every 2 seconds when no positions
-            
+
+            time.sleep(60)  # Check every 60 seconds when no positions
+
         except KeyboardInterrupt:
             binance.info("Position monitor stopped by user")
             break
@@ -191,16 +191,16 @@ def scan_for_scalp_opportunities_binance():
                     if not enabled_chats:
                        continue
 
-                    message = (
-                        f"🚨 BINANCE - Scalp Signal Detected!\n"
-                        f"Symbol: {symbol}\n"
-                        f"Side: {signal['side'].upper()}\n"
-                        f"Entry: {signal['entry']:.4f}\n"
-                        f"Stop Loss: {signal['stop_loss']:.4f}\n"
-                        f"Take Profit: {signal['take_profit']:.4f}\n"
-                        f"Confidence: {signal['confidence']:.2f} - {confidence_level}\n"
-                        f"RR: {signal['risk_reward_ratio']:.2f} | Vol Spike: {signal['volume_ratio']:.1f}x"
-                    )
+                    # message = (
+                    #     f"🚨 BINANCE - Scalp Signal Detected!\n"
+                    #     f"Symbol: {symbol}\n"
+                    #     f"Side: {signal['side'].upper()}\n"
+                    #     f"Entry: {signal['entry']:.4f}\n"
+                    #     f"Stop Loss: {signal['stop_loss']:.4f}\n"
+                    #     f"Take Profit: {signal['take_profit']:.4f}\n"
+                    #     f"Confidence: {signal['confidence']:.2f} - {confidence_level}\n"
+                    #     f"RR: {signal['risk_reward_ratio']:.2f} | Vol Spike: {signal['volume_ratio']:.1f}x"
+                    # )
 
                     # 🔥 Open position immediately
                     order_result = place_futures_order(signal)
@@ -209,7 +209,8 @@ def scan_for_scalp_opportunities_binance():
                         for chat_id in enabled_chats:
                             # ✅ Send confirmation that position was opened
                             confirmation_msg = (
-                                f"✅ POSITION OPENED on BINANCE\n"
+                                f"🚨 BINANCE - Scalp Signal Detected!\n"
+                                f"✅ POSITION OPENED\n"
                                 f"Symbol: {symbol}\n"
                                 f"Side: {signal['side'].upper()}\n"
                                 f"Qty: {order_result['quantity']:.6f}\n"
