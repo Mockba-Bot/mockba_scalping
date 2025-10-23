@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 from pathlib import Path
+import binance
 import psutil
 import os
 import sys
@@ -33,20 +34,24 @@ def scan_for_scalp_opportunities():
     orderly.info("🔍 Starting Orderly scalp candidate scan...")
 
     try:
-        # Get top liquid symbols (focus on top 30 for HFT)
-        liquid_symbols = set(get_top_liquidity_symbols(top_n=30))  # Reduced from 30
+        # Get high-liquidity symbols (top 20–30)
+        liquid_symbols = set(get_top_liquidity_symbols(top_n=25))
 
-        # Get short-term movers (use 5–10 min, not 30)
-        gainers, losers = get_top_gainers_losers(interval_minutes=30)
+        # Get movers from multiple timeframes
+        gainers_5m, losers_5m = get_top_gainers_losers(interval_minutes=5)
+        gainers_15m, losers_15m = get_top_gainers_losers(interval_minutes=15)
+
+        # Combine all movers
+        all_movers = set(gainers_5m + losers_5m + gainers_15m + losers_15m)
 
         # Prioritize: liquid + moving
-        high_priority = liquid_symbols & (set(gainers) | set(losers))
-        # Fallback: just liquid (if no movers)
+        high_priority = liquid_symbols & all_movers
         candidates = sorted(high_priority or liquid_symbols)
 
-        orderly.info(f"🎯 Scanning {len(candidates)} high-priority candidates: {candidates}")
-        orderly.debug(f"📈 Gainers: {gainers}")
-        orderly.debug(f"📉 Losers: {losers}")
+        orderly.info(f"🎯 Scanning {len(candidates)} Orderly candidates: {candidates}")
+        orderly.debug(f"📈 Gainers: {gainers_5m} {gainers_15m}")
+        orderly.debug(f"📉 Losers: {losers_5m} {losers_15m}")
+
 
         signals = []
         for symbol in candidates:
