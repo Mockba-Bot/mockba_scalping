@@ -20,7 +20,7 @@ from scanner import detect_liquidity_sweep_binance
 from logs.log_config import binance_trader_logger as binance
 from trading_bot.send_bot_message import send_bot_message
 from trading_bot.futures_executor_binance import place_futures_order
-from db.db_ops import insert_position_with_orders, get_open_positions, update_position_pnl, get_all_signal_statuses
+from db.db_ops import insert_position_with_orders, get_open_positions, update_position_pnl, get_all_signal_statuses, initialize_database_tables
 
 # Binance client for position monitoring
 from binance.client import Client as BinanceClient
@@ -265,6 +265,9 @@ def main_loop_binance(interval_seconds: int = 5):
         time.sleep(remaining)
 
 if __name__ == "__main__":
+    # 1. Initialize DB schema
+    initialize_database_tables()
+    
     # Start position monitor in background thread
     monitor_thread = threading.Thread(
         target=position_monitor_loop,

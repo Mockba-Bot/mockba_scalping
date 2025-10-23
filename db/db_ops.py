@@ -210,3 +210,57 @@ def get_all_signal_statuses():
     finally:
         if conn:
             conn.close()
+
+
+def initialize_database_tables():
+    """Create required tables if they don't exist."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Create scalp_settings first (no deps)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scalp_settings (
+                chat_id BIGINT PRIMARY KEY,
+                signals_enabled BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
+
+        # Create scalp_positions (depends on no other table)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scalp_positions (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                side VARCHAR(10) NOT NULL,
+                entry_price NUMERIC(20,8) NOT NULL,
+                stop_loss NUMERIC(20,8) NOT NULL,
+                take_profit NUMERIC(20,8) NOT NULL,
+                quantity NUMERIC(20,8) NOT NULL,
+                notional_usd NUMERIC(20,2),
+                status VARCHAR(20) DEFAULT 'OPEN',
+                current_pnl_pct NUMERIC(10,4) DEFAULT 0.0,
+                current_pnl_usd NUMERIC(20,2) DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                entry_order_id BIGINT,
+                tp_order_id BIGINT,
+                sl_order_id BIGINT,
+                fill_price NUMERIC(20,8),
+                exchange TEXT
+            );
+        """)
+
+        conn.commit()
+        print("✅ Database tables initialized successfully.")
+
+    except Exception as e:
+        print(f"❌ Failed to initialize database tables: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()           
