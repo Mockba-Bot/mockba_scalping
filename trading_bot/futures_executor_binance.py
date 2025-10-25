@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.enums import *
 import redis
-from logs.log_config import binance_binance as logger
+from logs.log_config import binance_trader_logger as logger
 
 load_dotenv()
 

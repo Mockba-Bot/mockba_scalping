@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +7,9 @@ import os
 import sys
 import threading
 from dotenv import load_dotenv
+import requests
+from datetime import datetime, timezone
+from typing import List, Dict, Optional
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -16,7 +20,7 @@ load_dotenv()
 # 🔁 Binance-specific modules
 from liquidity_ranker import get_top_liquidity_symbols
 from gainers_losers import get_top_gainers_losers
-from scanner import detect_liquidity_sweep_binance
+from scanner import calc_binance_spread_pct, detect_liquidity_sweep_binance
 from logs.log_config import binance_trader_logger as binance
 from trading_bot.send_bot_message import send_bot_message
 from trading_bot.futures_executor_binance import place_futures_order
@@ -33,6 +37,9 @@ monitor_client = BinanceClient(
 # Lock file to prevent multiple instances
 LOCK_FILE = Path("/tmp/scalp_scanner_binance_logs.lock")
 
+DEEP_SEEK_API_KEY = os.getenv("DEEP_SEEK_API_KEY")
+BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+
 def get_confidence_level(confidence: float) -> str:
     """Map confidence score to human-readable level"""
     if confidence >= 2.5:
@@ -45,6 +52,66 @@ def get_confidence_level(confidence: float) -> str:
         return "⚠️ WEAK"
     else:
         return "❌ VERY WEAK"
+
+# ======================
+# Binance LLM Context Helpers
+# ======================
+
+def get_binance_klines(symbol: str, interval: str, limit: int = 100) -> List[List]:
+    """Fetch OHLCV klines from Binance Futures."""
+    try:
+        resp = requests.get(
+            f"{BINANCE_FUTURES_BASE}/fapi/v1/klines",
+            params={"symbol": symbol, "interval": interval, "limit": min(limit, 1000)},
+            timeout=3
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        binance.warning(f"Kline fetch failed for {symbol}: {e}")
+    return []
+
+def get_binance_funding_rate(symbol: str) -> float:
+    """Get current funding rate (e.g., -0.000012 = -0.0012%)"""
+    try:
+        resp = requests.get(
+            f"{BINANCE_FUTURES_BASE}/fapi/v1/fundingRate",
+            params={"symbol": symbol},
+            timeout=3
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data:
+                return float(data[0]["fundingRate"])
+    except Exception as e:
+        binance.warning(f"Funding rate fetch failed for {symbol}: {e}")
+    return 0.0
+
+def get_last_n_candles_binance(symbol: str, interval: str, n: int) -> List[Dict]:
+    raw = get_binance_klines(symbol, interval, n)
+    candles = []
+    for k in raw[-n:]:
+        # Binance kline: [open_time, open, high, low, close, volume, ...]
+        ts, o, h, l, c, v = k[0], k[1], k[2], k[3], k[4], k[5]
+        # Convert timestamp (ms) to timezone-aware UTC datetime
+        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+        candles.append({
+            "time": dt.isoformat(),  # Already includes 'Z' or +00:00
+            "open": float(o),
+            "high": float(h),
+            "low": float(l),
+            "close": float(c),
+            "volume": float(v)
+        })
+    return candles
+
+def get_current_spread_bps_binance(symbol: str) -> float:
+    spread_pct = calc_binance_spread_pct(symbol)
+    return spread_pct * 10_000  # to basis points
+
+def get_funding_rate_binance(symbol: str) -> float:
+    return get_binance_funding_rate(symbol)
+
 
 def update_position_from_binance(position_id: int, db_row: dict):
     """Update position with real fill data from Binance."""
@@ -138,6 +205,103 @@ def position_monitor_loop():
             binance.error(f"Position monitor error: {e}")
             time.sleep(5)
 
+
+def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
+    """Consult DeepSeek as a KILLER 70%+ win rate scalper for Binance signals."""
+
+    try:
+        # Fetch context
+        candles = get_last_n_candles_binance(symbol, "5m", 10)
+        spread_bps = get_current_spread_bps_binance(symbol)
+        funding_rate = get_funding_rate_binance(symbol)
+        
+        # Calculate recent momentum
+        recent_closes = [c['close'] for c in candles[-5:]]
+        momentum = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
+        
+        # Volume analysis
+        volumes = [c['volume'] for c in candles]
+        avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
+        current_volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1.0
+
+        candles_str = "\n".join([
+            f"- {c['time']}: O={c['open']:.4f} H={c['high']:.4f} L={c['low']:.4f} C={c['close']:.4f} V={c['volume']:.0f}"
+            for c in candles[-5:]
+        ])
+
+        prompt = f"""You are a KILLER 70%+ win rate futures scalper. You ONLY enter high-probability setups.
+        CRITICAL FILTERS for 70%+ success rate:
+        - Spread MUST be < 2.5 bps for clean entries/exits
+        - Volume spike MUST be > 2.5x average (current: {current_volume_ratio:.1f}x)
+        - Momentum MUST align with signal direction (current: {momentum:+.2f}%)
+        - Funding rate favorable or neutral (current: {funding_rate:.6f})
+        - RR ratio MUST be > 1:1.5 (current: {abs((signal['take_profit'] - signal['entry']) / (signal['entry'] - signal['stop_loss'])):.2f}:1)
+
+        SIGNAL ANALYSIS:
+        Symbol: {symbol} | Side: {signal['side'].upper()}
+        Entry: {signal['entry']:.4f} | SL: {signal['stop_loss']:.4f} | TP: {signal['take_profit']:.4f}
+        Risk: {abs((signal['stop_loss'] - signal['entry']) / signal['entry']) * 100:.3f}%
+        Reward: {abs((signal['take_profit'] - signal['entry']) / signal['entry']) * 100:.3f}%
+        RR Ratio: {abs((signal['take_profit'] - signal['entry']) / (signal['entry'] - signal['stop_loss'])):.2f}:1
+        Volume Ratio: {current_volume_ratio:.1f}x | Spread: {spread_bps:.2f} bps
+        Momentum (5-candle): {momentum:+.2f}%
+        Funding: {funding_rate:.6f} ({funding_rate * 100:.4f}%)
+
+        Recent Price Action:
+        {candles_str}
+
+        DECISION MATRIX:
+        ✅ APPROVE if: 
+           - Spread < 2.5 bps AND Volume > 2.5x AND RR > 1.5
+           - Momentum confirms direction (positive for LONG, negative for SHORT)  
+           - No major wicks against position in last 2 candles
+        ❌ REJECT if any red flags
+
+        Respond with RAW JSON only:
+        {{
+        "approve": true/false,
+        "reason": "≤10 words. Be brutal.",
+        "confidence_boost": -0.5 to +0.5 (adjust based on filter compliance)
+        }}"""
+
+        response = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {DEEP_SEEK_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek-coder",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,  # Slight creativity for edge cases
+                "max_tokens": 150
+            },
+            timeout=3
+        )
+
+        if response.status_code == 200:
+            content = response.json()['choices'][0]['message']['content'].strip()
+            # Clean JSON response
+            if content.startswith("```json"):
+                content = content[7:].split("```")[0]
+            elif content.startswith("```"):
+                content = content[3:].split("```")[0]
+            return json.loads(content)
+
+    except Exception as e:
+        binance.warning(f"DeepSeek agent failed for {symbol}: {e}")
+
+    return None
+
+def should_call_deepseek(signal: dict, spread_bps: float, volume_ratio: float) -> bool:
+    """Pre-filter to avoid unnecessary DeepSeek calls"""
+    if (signal['confidence'] < 1.8 or 
+        spread_bps >= 3.0 or 
+        volume_ratio < 2.0 or
+        signal.get('risk_reward_ratio', 0) < 1.3):
+        return False
+    return True
+
 def scan_for_scalp_opportunities_binance():
     """Run one full Binance scan cycle and return valid signals."""
     start_time = time.time()
@@ -183,53 +347,69 @@ def scan_for_scalp_opportunities_binance():
                 )
                 binance.info(log_msg)
 
-                # Send Telegram alert (only for MODERATE+)
-                if signal['confidence'] >= 1.3:
+                # Send Telegram alert (only for STRONG+)
+                if signal['confidence'] >= 1.8:
                     chat_statuses = get_all_signal_statuses()
                     enabled_chats = [e['chat_id'] for e in chat_statuses if e['signals_enabled']]
-
                     if not enabled_chats:
-                       continue
+                        continue
 
-                    # message = (
-                    #     f"🚨 BINANCE - Scalp Signal Detected!\n"
-                    #     f"Symbol: {symbol}\n"
-                    #     f"Side: {signal['side'].upper()}\n"
-                    #     f"Entry: {signal['entry']:.4f}\n"
-                    #     f"Stop Loss: {signal['stop_loss']:.4f}\n"
-                    #     f"Take Profit: {signal['take_profit']:.4f}\n"
-                    #     f"Confidence: {signal['confidence']:.2f} - {confidence_level}\n"
-                    #     f"RR: {signal['risk_reward_ratio']:.2f} | Vol Spike: {signal['volume_ratio']:.1f}x"
-                    # )
+                    # 🔍 Get market data for pre-filtering
+                    candles = get_last_n_candles_binance(symbol, "5m", 10)
+                    spread_bps = get_current_spread_bps_binance(symbol)
+                    
+                    # Calculate current volume ratio for pre-filter
+                    volumes = [c['volume'] for c in candles]
+                    avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
+                    current_volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1.0
 
-                    # 🔥 Open position immediately
-                    order_result = place_futures_order(signal)
+                    # 🔍 Consult DeepSeek agent (only for borderline or high-value signals)
+                    llm_approved = True
+                    final_confidence = signal['confidence']
 
-                    if order_result:
-                        for chat_id in enabled_chats:
-                            # ✅ Send confirmation that position was opened
-                            confirmation_msg = (
-                                f"🚨 BINANCE - Scalp Signal Detected!\n"
-                                f"✅ POSITION OPENED\n"
-                                f"Symbol: {symbol}\n"
-                                f"Side: {signal['side'].upper()}\n"
-                                f"Qty: {order_result['quantity']:.6f}\n"
-                                f"Entry: {signal['entry']:.4f}\n"
-                                f"TP: {signal['take_profit']:.4f} (MARKET)\n"
-                                f"SL: {signal['stop_loss']:.4f} (MARKET)\n"
-                                f"⚠️ Auto-closing on TP/SL hit"
-                            )
-                            send_bot_message(chat_id, confirmation_msg)
-
-                            # ✅ INSERT POSITION INTO DATABASE
-                            insert_position_with_orders(
-                                chat_id=int(chat_id),
-                                signal=signal,
-                                order_result=order_result,
-                                exchange="BINANCE"
-                            )
+                    # 🎯 APPLY PRE-FILTER HERE - ONLY ADDITION
+                    if should_call_deepseek(signal, spread_bps, current_volume_ratio):
+                        llm_verdict = consult_deepseek_agent_binance(symbol, signal)
+                        if llm_verdict:
+                            llm_approved = llm_verdict.get('approve', True)
+                            boost = float(llm_verdict.get('confidence_boost', 0.0))
+                            reason = llm_verdict.get('reason', 'No reason')
+                            final_confidence = max(0.0, signal['confidence'] + boost)
+                            binance.info(f"🧠 DeepSeek for {symbol}: {'✅' if llm_approved else '❌'} | {reason} | Boost: {boost:+.2f}")
+                        else:
+                            binance.info(f"⏭️ DeepSeek skipped (fallback to original signal)")
                     else:
-                        binance.warning(f"⚠️ Failed to place order for {symbol} on Binance, no alerts sent.")        
+                        llm_verdict = None
+                        binance.info(f"⏭️ DeepSeek skipped due to pre-filters | Spread: {spread_bps:.1f}bps, Vol: {current_volume_ratio:.1f}x")
+
+                    # Final gate
+                    if llm_approved and final_confidence >= 1.8:
+                        order_result = place_futures_order(signal)
+                        if order_result:
+                            for chat_id in enabled_chats:
+                                confirmation_msg = (
+                                    f"🚨 BINANCE - Scalp Signal Detected!\n"
+                                    f"✅ POSITION OPENED\n"
+                                    f"Symbol: {symbol}\n"
+                                    f"Side: {signal['side'].upper()}\n"
+                                    f"Qty: {order_result['quantity']:.6f}\n"
+                                    f"Entry: {signal['entry']:.4f}\n"
+                                    f"TP: {signal['take_profit']:.4f} (MARKET)\n"
+                                    f"SL: {signal['stop_loss']:.4f} (MARKET)\n"
+                                    f"Confidence: {final_confidence:.2f} ({get_confidence_level(final_confidence)})\n"
+                                    f"⚠️ Auto-closing on TP/SL hit"
+                                )
+                                send_bot_message(chat_id, confirmation_msg)
+                                # insert_position_with_orders(
+                                #     chat_id=int(chat_id),
+                                #     signal=signal,
+                                #     order_result=order_result,
+                                #     exchange="BINANCE"
+                                # )
+                        else:
+                            binance.warning(f"⚠️ Failed to place order for {symbol}")
+                    else:
+                        binance.info(f"⏭️ Signal for {symbol} rejected after LLM review.")
 
             except Exception as e:
                 binance.warning(f"⚠️ Error scanning {symbol} on Binance: {e}")
@@ -243,20 +423,47 @@ def scan_for_scalp_opportunities_binance():
         binance.error(f"💥 Binance scan cycle failed: {e}", exc_info=True)
         return []
 
-def main_loop_binance(interval_seconds: int = 5):
-    """Main loop with lock protection for Binance."""
-    binance.info("🚀 Binance scalp signal monitor started. Press Ctrl+C to stop.")
+def get_market_volatility_interval():
+    """Smart interval based on market conditions for Binance"""   
+    now = datetime.now()
+    hour = now.hour
+    weekday = now.weekday()
+    
+    # Extended high-volatility sessions for crypto
+    market_hours = {
+        "high_volatility": [0, 1, 2, 8, 9, 13, 14, 15, 20, 21, 22],  # Added crypto prime hours
+        "normal": [3, 4, 5, 10, 11, 12, 16, 17, 18, 19, 23],
+        "low_volatility": [6, 7]  # Early Asia dead zone
+    }
+    
+    # Weekend detection - crypto is more active on weekends
+    if weekday >= 5:
+        return 30  # Slightly more frequent on weekends for crypto
+    
+    if hour in market_hours["high_volatility"]:
+        return 8
+    elif hour in market_hours["normal"]:
+        return 15
+    else:
+        return 25
 
+def main_loop_binance():
+    """Main loop with adaptive intervals for Binance"""
+    binance.info("🚀 Binance adaptive scalp signal monitor started.")
+    
     while True:
         cycle_start = time.time()
+        
+        # Get adaptive interval
+        interval = get_market_volatility_interval()
         
         # Check for existing lock
         if LOCK_FILE.exists():
             try:
                 pid = int(LOCK_FILE.read_text().strip())
                 if psutil.pid_exists(pid):
-                    binance.warning(f"🔒 Binance scanner already running (PID {pid}). Skipping cycle.")
-                    time.sleep(interval_seconds)
+                    binance.info(f"🔒 Binance scanner already running (PID {pid}). Sleeping {interval}s.")
+                    time.sleep(interval)
                     continue
                 else:
                     binance.warning(f"⚠️ Stale lock detected (PID {pid} not running). Removing...")
@@ -265,15 +472,14 @@ def main_loop_binance(interval_seconds: int = 5):
                 binance.error(f"⚠️ Error reading lock file. Removing lock: {e}")
                 LOCK_FILE.unlink()
 
-        binance.info(f"⏱️ Starting Binance scan cycle at {datetime.now().isoformat()}")
+        binance.info(f"⏱️ Starting Binance scan cycle at {datetime.now().isoformat()} | Interval: {interval}s")
 
         # Acquire lock
         try:
             LOCK_FILE.write_text(str(os.getpid()))
-            binance.info(f"🔐 Lock acquired (PID: {os.getpid()})")
-
+            
             # Run scan
-            signals = scan_for_scalp_opportunities_binance()
+            scan_for_scalp_opportunities_binance()
 
         except Exception as e:
             binance.error(f"🚨 Unexpected error in Binance scan cycle: {e}")
@@ -282,27 +488,27 @@ def main_loop_binance(interval_seconds: int = 5):
             # Always release lock
             if LOCK_FILE.exists():
                 LOCK_FILE.unlink()
-                binance.info("🔓 Binance lock released.")
 
-        # Sleep until next cycle
+        # Adaptive sleep based on market conditions
         cycle_time = time.time() - cycle_start
-        remaining = max(1, interval_seconds - cycle_time)  # min 1s sleep
+        remaining = max(1, interval - cycle_time)
         
-        binance.info(f"📊 BINANCE CYCLE COMPLETE: {cycle_time:.2f}s | Sleeping {remaining:.1f}s")
+        binance.info(f"📊 BINANCE CYCLE: {cycle_time:.2f}s | Market Interval: {interval}s | Sleeping {remaining:.1f}s")
         time.sleep(remaining)
+
 
 if __name__ == "__main__":
     # 1. Initialize DB schema
     initialize_database_tables()
 
     # Start position monitor in background thread
-    monitor_thread = threading.Thread(
-        target=position_monitor_loop,
-        daemon=True,
-        name="PositionMonitor"
-    )
-    monitor_thread.start()
-    binance.info("✅ Position monitor started in background")
+    # monitor_thread = threading.Thread(
+    #     target=position_monitor_loop,
+    #     daemon=True,
+    #     name="PositionMonitor"
+    # )
+    # monitor_thread.start()
+    # binance.info("✅ Position monitor started in background")
     
     # Start main scanner loop
-    main_loop_binance(interval_seconds=5)
+    main_loop_binance()
