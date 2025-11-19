@@ -22,10 +22,12 @@ BINANCE_BASE = "https://fapi.binance.com"  # ✅ Futures API
 # 🔧 Filters (adjusted for real-world scalping)
 MIN_PRICE_USDT = 0.0001
 MAX_PRICE_USDT = 1_000_000
-MAX_SPREAD_PCT = 0.0010       # 0.10% (10 bps)
-MIN_DEPTH_USDT = 100          # $100 min depth (top 3 levels)
-MIN_VOLUME_5M_USDT = 10_000   # $10k 5m volume
+MAX_SPREAD_PCT = 0.0004      # 0.04% - crucial for scalping
+MIN_DEPTH_USDT = 500000      # Higher liquidity for easy exits
+MIN_VOLUME_5M_USDT = 500000  # High volume pairs only
 MAX_VOLATILITY_5M = 0.08      # 8% max 5m volatility
+# Only trade when there's directional movement
+MIN_DIRECTIONAL_MOVEMENT = 0.002  # 0.2% minimum move
 
 # Stable-stable pairs to exclude
 STABLE_STABLE_PAIRS = {
@@ -105,7 +107,7 @@ def fetch_binance_klines(symbol: str, interval: str = "5m", limit: int = 1) -> O
     except Exception:
         return None
 
-# === Liquidity Score (same as your Orderly logic) ===
+# === Liquidity Score  ===
 def calculate_liquidity_score(spread_pct: float, depth_usdt: float, volume_5m: float) -> float:
     spread_score = max(0, 0.001 - spread_pct) * 20000
     depth_score = min(depth_usdt / 2000, 10.0)

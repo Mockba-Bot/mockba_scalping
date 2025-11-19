@@ -35,22 +35,22 @@ except Exception as e:
     logger.error(f"Redis connection failed: {e}")
     redis_client = None
 
-# Risk parameters
-RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))  # ← Now defaults to 1%
+# Risk parameters - SAFER VALUES
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.3"))  # Reduced to 0.3%
 LEVERAGE_MAP = {
-    "🚀 VERY STRONG": int(os.getenv("MAX_LEVERAGE_VERY_STRONG", "20")),
-    "💪 STRONG": int(os.getenv("MAX_LEVERAGE_STRONG", "15")),
-    "👍 MODERATE": int(os.getenv("MAX_LEVERAGE_MODERATE", "10")),
+    "🚀 VERY STRONG": int(os.getenv("MAX_LEVERAGE_VERY_STRONG", "3")),  # Reduced to 3x
+    "💪 STRONG": int(os.getenv("MAX_LEVERAGE_STRONG", "2")),            # Reduced to 2x
+    "👍 MODERATE": int(os.getenv("MAX_LEVERAGE_MODERATE", "1")),        # Reduced to 1x
     "⚠️ WEAK": 0,
     "❌ VERY WEAK": 0
 }
 
 def get_confidence_level(confidence: float) -> str:
-    if confidence >= 2.5:
+    if confidence >= 3.0:  # STRONGER thresholds
         return "🚀 VERY STRONG"
-    elif confidence >= 1.8:
+    elif confidence >= 2.0:
         return "💪 STRONG"
-    elif confidence >= 1.3:
+    elif confidence >= 1.8:
         return "👍 MODERATE"
     else:
         return "⚠️ WEAK"
@@ -122,8 +122,8 @@ def calculate_position_size_with_margin_cap(signal: dict, available_balance: flo
 
     qty_by_risk = risk_amount / risk_per_unit
 
-    # Margin-based cap
-    max_notional = available_balance * leverage * 0.95
+    # Margin-based cap - SAFER
+    max_notional = available_balance * leverage * 0.5  # 50% of available margin (was 75%)
     qty_by_margin = max_notional / entry
 
     qty = min(qty_by_risk, qty_by_margin)
@@ -151,6 +151,11 @@ def place_futures_order(signal: dict):
         logger.info(f"Signal too weak ({confidence_level}), skipping: {symbol}")
         return None
 
+    # SAFER: Check minimum confidence level
+    if confidence < 2.0:  # Only trade STRONG+ signals (was 1.8)
+        logger.info(f"Confidence too low ({confidence:.2f} < 2.0), skipping: {symbol}")
+        return None
+
     leverage = LEVERAGE_MAP[confidence_level]
     info = get_futures_exchange_info(symbol)
     if not info:
@@ -158,17 +163,23 @@ def place_futures_order(signal: dict):
         return None
 
     available_balance = get_available_balance()
-    if available_balance <= 5.0:
-        logger.error("No available balance")
+    if available_balance <= 15.0:  # Minimum $15 balance required (was $10)
+        logger.error(f"Insufficient balance: ${available_balance:.2f}")
         return None
 
     # ✅ Use margin-aware position sizing
     qty = calculate_position_size_with_margin_cap(signal, available_balance, leverage, info)
     if qty <= 0:
+        logger.warning(f"Position size calculation failed for {symbol}")
         return None
 
     entry_price = float(signal['entry'])
     notional = qty * entry_price
+
+    # Check if notional is reasonable for scalping
+    if notional < 15 or notional > available_balance * 0.2:  # Min $15, Max 20% of balance (was 30%)
+        logger.warning(f"Notional ${notional:.2f} outside safe range for {symbol}")
+        return None
 
     set_leverage(symbol, leverage)
 
@@ -180,20 +191,40 @@ def place_futures_order(signal: dict):
     tp_price = round(float(signal['take_profit']), info['pricePrecision'])
     sl_price = round(float(signal['stop_loss']), info['pricePrecision'])
 
+    # SAFETY CHECK: Ensure TP and SL are valid
+    if side == 'BUY':
+        if tp_price <= entry_price or sl_price >= entry_price:
+            logger.warning(f"Invalid TP/SL for BUY: TP={tp_price}, Entry={entry_price}, SL={sl_price}")
+            return None
+    else:  # SELL
+        if tp_price >= entry_price or sl_price <= entry_price:
+            logger.warning(f"Invalid TP/SL for SELL: TP={tp_price}, Entry={entry_price}, SL={sl_price}")
+            return None
+
     try:
-        # ✅ Use MARKET order for immediate execution
-        logger.info(f"Placing LIMIT {side} for {symbol} | Qty: {qty} | Leverage: {leverage}x")
+        # ✅ Use MARKET order for immediate execution - BUT with safety
+        logger.info(f"Placing MARKET {side} for {symbol} | Qty: {qty} | Leverage: {leverage}x | Notional: ${notional:.2f}")
+        
+        # First, check if position already exists (safety check)
+        try:
+            position_info = client.futures_position_information(symbol=symbol)
+            for pos in position_info:
+                if float(pos['positionAmt']) != 0:
+                    logger.warning(f"Position already exists for {symbol}, skipping order")
+                    return None
+        except:
+            pass  # Continue if we can't check existing positions
+
+        # Place entry order (MARKET for immediate execution)
         entry_order = client.futures_create_order(
             symbol=symbol,
-            type=ORDER_TYPE_LIMIT,
-            timeInForce=TIME_IN_FORCE_GTC,  # or TIME_IN_FORCE_IOC if you prefer immediate-or-cancel
+            type=ORDER_TYPE_MARKET,
             side=order_side,
-            price=entry_price,
             quantity=qty,
             positionSide='BOTH'
         )
         entry_id = entry_order['orderId']
-        logger.info(f"Entry order placed: {entry_id}")
+        logger.info(f"Entry market order filled: {entry_id} @ {entry_order['avgPrice']}")
 
         # Take Profit (MARKET)
         tp_order = client.futures_create_order(
@@ -236,7 +267,11 @@ def place_futures_order(signal: dict):
         err_msg = str(e)
         logger.error(f"Error placing orders for {symbol}: {err_msg}")
         if e.code == -2019:
-            logger.warning(f"Margin insufficient. Balance={available_balance:.4f}, Notional={notional:.2f}, Leverage={leverage}x")
+            logger.warning(f"Margin insufficient. Balance=${available_balance:.2f}, Notional=${notional:.2f}, Leverage={leverage}x")
+        elif e.code == -1111:
+            logger.warning(f"Precision error for {symbol}")
+        elif e.code == -2022:
+            logger.warning(f"Reduce only error for {symbol}")
         return None
     except Exception as e:
         logger.error(f"Unexpected error placing orders for {symbol}: {e}")

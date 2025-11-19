@@ -39,18 +39,42 @@ LOCK_FILE = Path("/tmp/scalp_scanner_binance_logs.lock")
 DEEP_SEEK_API_KEY = os.getenv("DEEP_SEEK_API_KEY")
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 
+# Risk management variables
+ACCOUNT_RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE_PCT", "0.5")) / 100
+MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", "1"))  # Only 1 position at a time
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0")) / 100
+DAILY_RESET_TIME = int(os.getenv("DAILY_RESET_HOUR", "0"))
+
+# Daily tracking
+daily_pnl = 0.0
+daily_pnl_start_time = time.time()
+account_balance = 0.0
+last_trade_time = 0  # Track last trade time
+# At the top of main.py, add:
+TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN_MINUTES", "30")) * 60  # Convert to seconds
+
+def get_account_balance():
+    """Get current account balance from Binance"""
+    try:
+        account_info = monitor_client.futures_account()
+        for asset in account_info['assets']:
+            if asset['asset'] == 'USDT':
+                return float(asset['marginBalance'])
+    except Exception as e:
+        binance.error(f"Error getting account balance: {e}")
+        return 20.0  # Default for testing
+    return 20.0
+
 def get_confidence_level(confidence: float) -> str:
     """Map confidence score to human-readable level"""
-    if confidence >= 2.5:
+    if confidence >= 3.0:  # STRONGER thresholds
         return "🚀 VERY STRONG"
-    elif confidence >= 1.8:
+    elif confidence >= 2.0:
         return "💪 STRONG"
-    elif confidence >= 1.3:
+    elif confidence >= 1.8:
         return "👍 MODERATE"
-    elif confidence >= 1.0:
-        return "⚠️ WEAK"
     else:
-        return "❌ VERY WEAK"
+        return "❌ WEAK"
 
 # ======================
 # Binance LLM Context Helpers
@@ -90,12 +114,10 @@ def get_last_n_candles_binance(symbol: str, interval: str, n: int) -> List[Dict]
     raw = get_binance_klines(symbol, interval, n)
     candles = []
     for k in raw[-n:]:
-        # Binance kline: [open_time, open, high, low, close, volume, ...]
         ts, o, h, l, c, v = k[0], k[1], k[2], k[3], k[4], k[5]
-        # Convert timestamp (ms) to timezone-aware UTC datetime
         dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
         candles.append({
-            "time": dt.isoformat(),  # Already includes 'Z' or +00:00
+            "time": dt.isoformat(),
             "open": float(o),
             "high": float(h),
             "low": float(l),
@@ -106,16 +128,14 @@ def get_last_n_candles_binance(symbol: str, interval: str, n: int) -> List[Dict]
 
 def get_current_spread_bps_binance(symbol: str) -> float:
     spread_pct = calc_binance_spread_pct(symbol)
-    return spread_pct * 10_000  # to basis points
+    return spread_pct * 10_000
 
 def get_funding_rate_binance(symbol: str) -> float:
     return get_binance_funding_rate(symbol)
 
-
 def update_position_from_binance(position_id: int, db_row: dict):
     """Update position with real fill data from Binance."""
     try:
-        # Get actual fill price from entry order
         order_info = monitor_client.futures_get_order(
             symbol=db_row['symbol'],
             orderId=db_row['entry_order_id']
@@ -123,22 +143,17 @@ def update_position_from_binance(position_id: int, db_row: dict):
         
         if order_info['status'] == 'FILLED':
             fill_price = float(order_info['avgPrice'])
-            
-            # Calculate current PnL
             current_price = float(monitor_client.futures_symbol_ticker(symbol=db_row['symbol'])['price'])
-            
-            # Convert DB Decimal values to float
             notional_usd = float(db_row['notional_usd'])
-            side = db_row['side']  # string, safe
+            side = db_row['side']
 
             if side == 'BUY':
                 pnl_pct = (current_price - fill_price) / fill_price * 100
             else:
                 pnl_pct = (fill_price - current_price) / fill_price * 100
                 
-            pnl_usd = (pnl_pct / 100) * notional_usd  # ✅ float * float
+            pnl_usd = (pnl_pct / 100) * notional_usd
             
-            # Update DB with fill price
             update_position_pnl(
                 position_id,
                 pnl_pct=pnl_pct,
@@ -146,16 +161,17 @@ def update_position_from_binance(position_id: int, db_row: dict):
                 fill_price=fill_price
             )
             
-            # Check if TP/SL hit
             tp_info = monitor_client.futures_get_order(symbol=db_row['symbol'], orderId=db_row['tp_order_id'])
             sl_info = monitor_client.futures_get_order(symbol=db_row['symbol'], orderId=db_row['sl_order_id'])
             
             if tp_info['status'] == 'FILLED':
                 update_position_pnl(position_id, pnl_pct=pnl_pct, pnl_usd=pnl_usd, status='TP')
+                global daily_pnl
+                daily_pnl += pnl_usd
             elif sl_info['status'] == 'FILLED':
                 update_position_pnl(position_id, pnl_pct=pnl_pct, pnl_usd=pnl_usd, status='SL')
+                daily_pnl += pnl_usd
 
-            # Return payload for notification purposes
             return {
                 'symbol': db_row['symbol'],
                 'side': side,
@@ -182,7 +198,6 @@ def position_monitor_loop():
                 for pos in open_positions:
                     closed_info = update_position_from_binance(pos['id'], pos)
                     if closed_info:
-                         # 📢 Send closure alert
                         emoji = "🟢" if closed_info['pnl_usd'] >= 0 else "🔴"
                         message = (
                             f"{emoji} POSITION UPDATE on BINANCE\n"
@@ -192,14 +207,13 @@ def position_monitor_loop():
                             f"Current Price: {closed_info['current_price']:.4f}\n"
                             f"PnL: {closed_info['pnl_pct']:.4f}% | ${closed_info['pnl_usd']:.4f}"
                         )
-                        # send bot message to all chats
                         chat_statuses = get_all_signal_statuses()
                         for status in chat_statuses:
                             send_bot_message(status['chat_id'], message)
 
-                    time.sleep(0.1)  # Respect Binance rate limits (10 req/sec)
+                    time.sleep(0.1)
 
-            time.sleep(60)  # Check every 60 seconds when no positions
+            time.sleep(60)
 
         except KeyboardInterrupt:
             binance.info("Position monitor stopped by user")
@@ -208,21 +222,17 @@ def position_monitor_loop():
             binance.error(f"Position monitor error: {e}")
             time.sleep(5)
 
-
 def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
     """Consult DeepSeek as a KILLER 70%+ win rate scalper for Binance signals."""
 
     try:
-        # Fetch context
         candles = get_last_n_candles_binance(symbol, "5m", 10)
         spread_bps = get_current_spread_bps_binance(symbol)
         funding_rate = get_funding_rate_binance(symbol)
         
-        # Calculate recent momentum
         recent_closes = [c['close'] for c in candles[-5:]]
         momentum = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
         
-        # Volume analysis
         volumes = [c['volume'] for c in candles]
         avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
         current_volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1.0
@@ -234,11 +244,11 @@ def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
 
         prompt = f"""You are a KILLER 70%+ win rate futures scalper. You ONLY enter high-probability setups.
         CRITICAL FILTERS for 70%+ success rate:
-        - Spread MUST be < 8.0 bps for clean entries/exits
-        - Volume should be sufficient (notional > $10), spike preferred but not required
+        - Spread MUST be < 5.0 bps for clean entries/exits
+        - Volume should be sufficient (notional > $20), spike preferred but not required
         - Momentum SHOULD align with signal direction (current: {momentum:+.2f}%)
         - Funding rate favorable or neutral (current: {funding_rate:.6f})
-        - RR ratio MUST be > 1:1.2 (current: {abs((signal['take_profit'] - signal['entry']) / (signal['entry'] - signal['stop_loss'])):.2f}:1)
+        - RR ratio MUST be > 1:2.0 (current: {abs((signal['take_profit'] - signal['entry']) / (signal['entry'] - signal['stop_loss'])):.2f}:1)
 
         SIGNAL ANALYSIS:
         Symbol: {symbol} | Side: {signal['side'].upper()}
@@ -255,7 +265,7 @@ def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
 
         DECISION MATRIX:
         ✅ APPROVE if: 
-        - Spread < 8.0 bps AND notional > $10 AND RR > 1.2
+        - Spread < 5.0 bps AND notional > $20 AND RR > 2.0
         - Momentum generally aligns (minor divergence acceptable for VERY STRONG signals)
         - No catastrophic rejection wick in last candle
         ❌ REJECT only for clear red flags (e.g., wide spread + low notional + adverse funding)
@@ -276,7 +286,7 @@ def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
             json={
                 "model": "deepseek-coder",
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,  # Slight creativity for edge cases
+                "temperature": 0.1,
                 "max_tokens": 150
             },
             timeout=3
@@ -284,7 +294,6 @@ def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
 
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
-            # Clean JSON response
             if content.startswith("```json"):
                 content = content[7:].split("```")[0]
             elif content.startswith("```"):
@@ -297,42 +306,78 @@ def consult_deepseek_agent_binance(symbol: str, signal: dict) -> dict | None:
     return None
 
 def should_call_deepseek(signal: dict, spread_bps: float, volume_ratio: float, symbol: str, current_price: float, current_volume: float) -> bool:
-    """
-    Decide whether to consult DeepSeek based on dynamic market conditions.
-    Now uses absolute notional instead of volume ratio and relaxes spread.
-    """
     confidence = signal['confidence']
     rr_ratio = signal.get('risk_reward_ratio', 0)
 
-    # 🔥 Bypass all pre-filters for VERY STRONG signals (confidence ≥ 3.5)
-    if confidence >= 3.5:
-        binance.info("🔥 Bypassing pre-filters: VERY STRONG signal (conf ≥ 3.5)")
+    # Check basic safety even for high confidence
+    if confidence >= 3.0:
+        current_notional = current_price * current_volume
+        if spread_bps >= 5.0 or current_notional < 20.0 or rr_ratio < 2.0:  # Stricter filters
+            binance.info("❌ Pre-filter failed despite high confidence: basic safety checks failed")
+            return False
+        binance.info("🔥 Passing pre-filters: VERY STRONG signal with safety checks passed")
         return True
 
     # Basic sanity: must have minimal RR
-    if rr_ratio < 1.2:
-        binance.info("❌ Pre-filter failed: RR ratio too low (<1.2)")
+    if rr_ratio < 2.0:  # 2:1 (was 1.2)
+        binance.info("❌ Pre-filter failed: RR ratio too low (<2.0)")
         return False
 
-    # ✅ Spread: allow up to 8.0 bps for alts (was 5.0)
-    if spread_bps >= 8.0:
-        binance.info(f"❌ Pre-filter failed: spread too high ({spread_bps:.1f} bps ≥ 8.0)")
+    if spread_bps >= 5.0:  # 5 bps (was 8)
+        binance.info(f"❌ Pre-filter failed: spread too high ({spread_bps:.1f} bps ≥ 5.0)")
         return False
 
-    # ✅ Use absolute notional instead of volume ratio
     current_notional = current_price * current_volume
-    min_notional = 10.0  # Require at least $10 notional in last candle
+    min_notional = 20.0  # $20 (was $10)
 
     if current_notional < min_notional:
         binance.info(f"❌ Pre-filter failed: notional too low (${current_notional:.2f} < ${min_notional})")
         return False
 
-    # Optional: still allow very low volume_ratio if notional is OK
-    # (e.g., quiet market but sufficient liquidity)
     binance.info(
         f"✅ Pre-filter passed | Conf={confidence:.2f}, Spread={spread_bps:.1f}bps, "
         f"Notional=${current_notional:.2f}, RR={rr_ratio:.2f}"
     )
+    return True
+
+def calculate_position_size(entry_price: float, stop_loss_price: float, account_balance: float) -> float:
+    """Calculate position size based on risk management"""
+    risk_amount = account_balance * ACCOUNT_RISK_PER_TRADE
+    price_risk = abs(entry_price - stop_loss_price)
+    
+    if price_risk == 0:
+        return 0.0
+    
+    position_size = risk_amount / price_risk
+    return min(position_size, account_balance * 0.1)  # Max 10% of account per trade
+
+def check_risk_limits() -> bool:
+    """Check if we should continue trading based on risk limits"""
+    global daily_pnl, account_balance, daily_pnl_start_time
+    
+    current_balance = get_account_balance()
+    if current_balance != account_balance:
+        account_balance = current_balance
+        daily_pnl_start_time = time.time()
+    
+    # Check daily loss limit
+    if daily_pnl < -account_balance * MAX_DAILY_LOSS_PCT:
+        binance.warning(f"🚨 DAILY LOSS LIMIT HIT: ${daily_pnl:.2f} (>{-account_balance * MAX_DAILY_LOSS_PCT:.2f})")
+        return False
+    
+    # Check concurrent positions
+    open_positions = len(get_open_positions())
+    if open_positions >= MAX_CONCURRENT_POSITIONS:
+        binance.info(f"⚠️ MAX CONCURRENT POSITIONS REACHED: {open_positions}/{MAX_CONCURRENT_POSITIONS}")
+        return False
+    
+    # Check trade cooldown
+    global last_trade_time
+    if time.time() - last_trade_time < TRADE_COOLDOWN:
+        time_remaining = TRADE_COOLDOWN - (time.time() - last_trade_time)
+        binance.info(f"⏳ Trade cooldown active: {time_remaining:.0f}s remaining")
+        return False
+    
     return True
 
 def scan_for_scalp_opportunities_binance():
@@ -341,8 +386,11 @@ def scan_for_scalp_opportunities_binance():
     binance.info("🔍 Starting Binance scalp candidate scan...")
 
     try:
-        # Get high-liquidity symbols (top 20–30)
-        liquid_symbols = set(get_top_liquidity_symbols(top_n=30))
+        if not check_risk_limits():
+            binance.warning("❌ Risk limits exceeded - skipping scan cycle")
+            return []
+
+        liquid_symbols = set(get_top_liquidity_symbols(top_n=20))  # Fewer symbols (was 30)
 
         candidates = sorted(liquid_symbols)
 
@@ -355,8 +403,8 @@ def scan_for_scalp_opportunities_binance():
                 if not signal:
                     continue
 
-                # Skip stale signals (>2 seconds old)
-                if time.time() - signal['timestamp'] > 2.0:
+                # Skip stale signals (>3 seconds old)
+                if time.time() - signal['timestamp'] > 3.0:  # 3 seconds (was 2)
                     continue
 
                 confidence_level = get_confidence_level(signal['confidence'])
@@ -370,35 +418,29 @@ def scan_for_scalp_opportunities_binance():
                 binance.info(log_msg)
 
                 # Send Telegram alert (only for STRONG+)
-                if signal['confidence'] >= 1.8:
+                if signal['confidence'] >= 2.0:  # STRONGER threshold (was 1.8)
                     binance.info(f"🎯 HIGH-CONFIDENCE SIGNAL: {symbol} {signal['confidence']:.2f} - Checking pre-filters...")
                     chat_statuses = get_all_signal_statuses()
                     enabled_chats = [e['chat_id'] for e in chat_statuses if e['signals_enabled']]
-                    # binance.info(f"📱 Chat statuses: {len(chat_statuses)} total, {len(enabled_chats)} enabled")
                     if not enabled_chats:
                         continue
 
-                    # 🔍 Get market data for pre-filtering
                     candles = get_last_n_candles_binance(symbol, "5m", 10)
                     spread_bps = get_current_spread_bps_binance(symbol)
 
                     binance.info(f"📈 Market data: {len(candles)} candles, spread={spread_bps:.1f}bps")
                     
-                    # Calculate current volume ratio for pre-filter
                     volumes = [c['volume'] for c in candles]
                     avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
                     current_volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1.0
 
                     binance.info(f"🔍 Volume analysis: current={volumes[-1]:.0f}, avg={avg_volume:.0f}, ratio={current_volume_ratio:.1f}x")
 
-                    # 🔍 Consult DeepSeek agent (only for borderline or high-value signals)
                     llm_approved = True
                     final_confidence = signal['confidence']
 
                     binance.info(f"🔍 DeepSeek pre-filter check: Confidence={signal['confidence']:.2f}, Spread={spread_bps:.1f}bps, VolRatio={current_volume_ratio:.1f}x")
                     
-
-                    # 🎯 APPLY PRE-FILTER HERE - ONLY ADDITION
                     current_price = float(candles[-1]['close'])
                     current_volume = float(candles[-1]['volume'])
 
@@ -423,9 +465,20 @@ def scan_for_scalp_opportunities_binance():
                         binance.info(f"⏭️ DeepSeek skipped due to pre-filters | Spread: {spread_bps:.1f}bps, Vol: {current_volume_ratio:.1f}x")
 
                     # Final gate
-                    if llm_approved and final_confidence >= 1.8:
+                    if llm_approved and final_confidence >= 2.0 and check_risk_limits():  # STRONGER threshold
 
-                        # Attempt to place a futures order; the executor returns a dict on success or None/False on failure
+                        position_size = calculate_position_size(
+                            signal['entry'], 
+                            signal['stop_loss'], 
+                            account_balance
+                        )
+                        
+                        if position_size <= 0:
+                            binance.warning(f"⚠️ Invalid position size for {symbol}: {position_size}")
+                            continue
+
+                        signal['quantity'] = position_size
+
                         order_result = place_futures_order(signal)
                         if order_result:
                             for chat_id in enabled_chats:
@@ -448,10 +501,12 @@ def scan_for_scalp_opportunities_binance():
                                     order_result=order_result,
                                     exchange="BINANCE"
                                 )
+                            global last_trade_time
+                            last_trade_time = time.time()  # Update last trade time
                         else:
                             binance.warning(f"⚠️ Failed to place order for {symbol}")
                     else:
-                        binance.info(f"⏭️ Signal for {symbol} DeepSeek skipped.")          
+                        binance.info(f"⏭️ Signal for {symbol} DeepSeek skipped or risk limits exceeded.")          
 
             except Exception as e:
                 binance.warning(f"⚠️ Error scanning {symbol} on Binance: {e}")
@@ -471,30 +526,23 @@ def get_market_volatility_interval():
     hour = now.hour
     weekday = now.weekday()
     
-    # Extended high-volatility sessions for crypto
-    market_hours = {
-        "high_volatility": [0, 1, 2, 8, 9, 13, 14, 15, 20, 21, 22],  # Added crypto prime hours
-        "normal": [3, 4, 5, 10, 11, 12, 16, 17, 18, 19, 23],
-        "low_volatility": [6, 7]  # Early Asia dead zone
-    }
-    
-    # Weekend detection - crypto is more active on weekends
-    if weekday >= 5:
-        return 30  # Slightly more frequent on weekends for crypto
-    
-    if hour in market_hours["high_volatility"]:
-        return 8
-    elif hour in market_hours["normal"]:
-        return 15
-    else:
-        return 25
+    # Reduced frequency for safer trading
+    return 300  # 5 minutes (was 8-25 seconds)
 
 def main_loop_binance():
     """Main loop with adaptive intervals for Binance"""
+    global daily_pnl, daily_pnl_start_time
     binance.info("🚀 Binance adaptive scalp signal monitor started.")
     
     while True:
         cycle_start = time.time()
+        
+        # Reset daily PnL at midnight UTC
+        now = datetime.now()
+        if now.hour == DAILY_RESET_TIME and now.minute < 5:
+            daily_pnl = 0.0
+            daily_pnl_start_time = time.time()
+            binance.info("📅 Daily PnL reset")
         
         # Get adaptive interval
         interval = get_market_volatility_interval()

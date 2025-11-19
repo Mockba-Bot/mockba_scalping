@@ -7,8 +7,6 @@ from datetime import datetime
 # List of scripts to run (relative to project root)
 scripts = [
     # binance futures perp scalping bot
-    # "futures_perps/scalping/orderly/main.py",
-    # orderly futures perp scalping bot
     "futures_perps/scalping/binance/main.py",
     # arbitrage scanner
     # "divergences/scanner.py"

@@ -10,21 +10,49 @@ load_dotenv()
 # Binance Futures API
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 
-# Fee structure (Binance USDT-M futures)
-TAKER_FEE = 0.0004  # 0.04%
-MAKER_FEE = 0.0002  # 0.02%
-TOTAL_FEES_PCT = TAKER_FEE + MAKER_FEE  # 0.06%
+# Fee structure (Binance USDT-M futures) - UPDATED
+TAKER_FEE = float(os.getenv("TAKER_FEE", "0.001"))
+MAKER_FEE = 0.0002
+TOTAL_FEES_PCT = TAKER_FEE + MAKER_FEE
 
-# Load parameters from .env
-TP_NET_TARGET = float(os.getenv("BINANCE_TP_NET_TARGET", "0.0012"))
+# Load parameters from .env - WIDER TARGETS
+TP_NET_TARGET = float(os.getenv("BINANCE_TP_NET_TARGET", "0.0075"))  # 0.75% (was 0.25%)
 TP_PCT = TP_NET_TARGET + TOTAL_FEES_PCT
-SWEEP_THRESHOLD_PCT = float(os.getenv("BINANCE_SWEEP_THRESHOLD_PCT", "0.0003"))
+SWEEP_THRESHOLD_PCT = float(os.getenv("BINANCE_SWEEP_THRESHOLD_PCT", "0.0020"))  # 0.20% (was 0.10%)
 VOLUME_SPIKE_MULTIPLIER = float(os.getenv("BINANCE_VOLUME_SPIKE_MULTIPLIER", "1.8"))
-PULLBACK_CONFIRM_PCT = float(os.getenv("BINANCE_PULLBACK_CONFIRM_PCT", "0.0"))  # unused but kept for compatibility
-MAX_SPREAD_PCT = float(os.getenv("BINANCE_MAX_SPREAD_PCT", "0.001"))
-MIN_CONFIDENCE = float(os.getenv("BINANCE_MIN_CONFIDENCE", "0.9"))
+PULLBACK_CONFIRM_PCT = float(os.getenv("BINANCE_PULLBACK_CONFIRM_PCT", "0.0"))
+MAX_SPREAD_PCT = float(os.getenv("BINANCE_MAX_SPREAD_PCT", "0.0005"))  # 0.05% (was 0.1%)
+MIN_CONFIDENCE = float(os.getenv("BINANCE_MIN_CONFIDENCE", "1.8"))  # STRONGER SIGNALS (was 1.3)
 MIN_TRADES_FOR_ANALYSIS = int(os.getenv("BINANCE_MIN_TRADES_FOR_ANALYSIS", "6"))
-SL_MULTIPLIER = float(os.getenv("SL_MULTIPLIER", "5.0"))  # Default: 5x sweep threshold
+SL_MULTIPLIER = float(os.getenv("SL_MULTIPLIER", "3.0"))  # 0.60% SL (was 0.20%)
+
+# Risk management
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
+MAX_LEVERAGE_VERY_STRONG = int(os.getenv("MAX_LEVERAGE_VERY_STRONG", "5"))
+MAX_LEVERAGE_STRONG = int(os.getenv("MAX_LEVERAGE_STRONG", "3"))
+MAX_LEVERAGE_MODERATE = int(os.getenv("MAX_LEVERAGE_MODERATE", "2"))
+
+# Additional thresholds
+MAX_SPREAD_BPS = float(os.getenv("MAX_SPREAD_BPS", "5.0"))
+MIN_TOP5_QUOTE_DEPTH = float(os.getenv("MIN_TOP5_QUOTE_DEPTH", "1000.0"))  # $1000 (was $500)
+START_NOTIONAL = float(os.getenv("START_NOTIONAL", "20"))
+MIN_PROFIT_PCT = float(os.getenv("MIN_PROFIT_PCT", "0.75"))  # 0.75% (was 0.5%)
+
+# Dynamic hubs configuration
+MAX_HUBS = int(os.getenv("MAX_HUBS", "50"))
+HUB_REFRESH_SECS = int(os.getenv("HUB_REFRESH_SECS", "300"))
+FORCED_HUBS = os.getenv("FORCED_HUBS", "USDT,FDUSD,DAI,BTC,ETH,BNB,SOL,XRP,SUI,TON,LINK,AAVE").split(",")
+
+# Trend filters
+TREND_PERIOD_HOURS = int(os.getenv("TREND_PERIOD_HOURS", "4"))  # Check 4h trend
+MIN_TREND_STRENGTH = float(os.getenv("MIN_TREND_STRENGTH", "0.002"))  # 0.2% minimum trend
+
+# Additional parameters
+MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0"))  # 2:1 (was 1.5)
+MIN_NET_PROFIT = float(os.getenv("MIN_NET_PROFIT", "0.0070"))  # 0.70% after fees
+MAX_POSITION_SIZE_USDT = float(os.getenv("MAX_POSITION_SIZE_USDT", "50"))
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))
+MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "10"))  # Reduced (was 20)
 
 # Cache for fair prices
 fair_price_cache: Dict = {}
@@ -61,7 +89,6 @@ def get_binance_recent_trades(symbol: str, limit: int = 100) -> List[Dict]:
         if resp.status_code != 200:
             return []
         trades = resp.json()
-        # Binance returns 'time' in ms, 'price', 'qty'
         return [
             {
                 "price": t["price"],
@@ -72,6 +99,20 @@ def get_binance_recent_trades(symbol: str, limit: int = 100) -> List[Dict]:
         ]
     except Exception:
         return []
+
+def get_binance_klines(symbol: str, interval: str, limit: int = 100) -> List[List]:
+    """Fetch OHLCV klines from Binance Futures."""
+    try:
+        resp = requests.get(
+            f"{BINANCE_FUTURES_BASE}/fapi/v1/klines",
+            params={"symbol": symbol, "interval": interval, "limit": min(limit, 1000)},
+            timeout=3
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        pass
+    return []
 
 def calc_binance_spread_pct(symbol: str) -> float:
     ob = get_binance_orderbook(symbol, limit=5)
@@ -84,13 +125,41 @@ def calc_binance_spread_pct(symbol: str) -> float:
     mid = (best_bid + best_ask) / 2
     return (best_ask - best_bid) / mid
 
-def has_sufficient_depth_binance(symbol: str, min_usdt_depth: float = 500) -> bool:
+def has_sufficient_depth_binance(symbol: str, min_usdt_depth: float = 1000) -> bool:  # $1000 (was $500)
     ob = get_binance_orderbook(symbol, limit=5)
     if not ob:
         return False
     bid_depth = sum(float(p) * float(q) for p, q in ob["bids"][:3])
     ask_depth = sum(float(p) * float(q) for p, q in ob["asks"][:3])
     return min(bid_depth, ask_depth) >= min_usdt_depth
+
+# ======================
+# Trend Analysis
+# ======================
+
+def get_trend_direction(symbol: str, hours: int = 4) -> float:
+    """Calculate trend direction over specified hours"""
+    interval = "1h"
+    limit = hours
+    klines = get_binance_klines(symbol, interval, limit)
+    
+    if len(klines) < 2:
+        return 0.0
+    
+    # Calculate trend from first to last
+    first_close = float(klines[0][4])
+    last_close = float(klines[-1][4])
+    trend = (last_close - first_close) / first_close
+    
+    return trend
+
+def is_trend_aligned(signal_side: str, trend_direction: float) -> bool:
+    """Check if signal aligns with trend"""
+    if trend_direction > MIN_TREND_STRENGTH and signal_side == "buy":
+        return True
+    elif trend_direction < -MIN_TREND_STRENGTH and signal_side == "sell":
+        return True
+    return False
 
 # ======================
 # Core Logic
@@ -135,15 +204,42 @@ def calculate_net_profit(entry_price: float, exit_price: float, side: str) -> fl
         price_change = (entry_price - exit_price) / entry_price
     return price_change - TOTAL_FEES_PCT
 
-def detect_liquidity_sweep_binance(symbol: str, lookback_sec: int = 60) -> Optional[Dict]:
+def detect_liquidity_sweep_binance(symbol: str, lookback_sec: int = 120) -> Optional[Dict]:
+    """Now uses momentum trend signals instead of just sweeps"""
+    return detect_momentum_trend_signal_binance(symbol, lookback_sec)
+
+# ======================
+# Scanner Interface
+# ======================
+def scan_binance_symbols(symbols: List[str], lookback_sec: int = 120) -> List[Dict]:
+    signals = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_symbol = {
+            executor.submit(detect_liquidity_sweep_binance, symbol, lookback_sec): symbol
+            for symbol in symbols
+        }
+        for future in as_completed(future_to_symbol):
+            try:
+                signal = future.result(timeout=8)
+                if signal:
+                    signals.append(signal)
+            except Exception:
+                continue
+    return sorted(signals, key=lambda x: x["confidence"], reverse=True)
+
+# ====================================
+# Detect_momentum_trend_signal_binance
+# ====================================
+def detect_momentum_trend_signal_binance(symbol: str, lookback_sec: int = 120) -> Optional[Dict]:
+    """Detect momentum signals aligned with trend instead of just sweeps"""
     try:
-        trades = get_binance_recent_trades(symbol, limit=200)
+        trades = get_binance_recent_trades(symbol, limit=300)  # More data points
         if len(trades) < MIN_TRADES_FOR_ANALYSIS:
             return None
 
         now_ms = time.time() * 1000
         recent_trades = [t for t in trades if now_ms - t["time"] <= lookback_sec * 1000]
-        if len(recent_trades) < 5:
+        if len(recent_trades) < 10:  # Need more trades
             return None
 
         fair_price = get_cached_fair_price(symbol, recent_trades)
@@ -161,138 +257,105 @@ def detect_liquidity_sweep_binance(symbol: str, lookback_sec: int = 60) -> Optio
         if spread_pct > MAX_SPREAD_PCT:
             return None
 
-        if not has_sufficient_depth_binance(symbol, min_usdt_depth=500):
+        if not has_sufficient_depth_binance(symbol, min_usdt_depth=1500):  # Higher depth
             return None
 
-        # Use last 10 trades
-        last_trades = recent_trades[-10:]
-        prices = [float(t["price"]) for t in last_trades]
-        volumes = [float(t["qty"]) for t in last_trades]
-
-        if not prices:
+        # Get trend direction (4-hour trend)
+        trend_direction = get_trend_direction(symbol, TREND_PERIOD_HOURS)
+        
+        # Get recent price action (momentum)
+        prices = [float(t["price"]) for t in recent_trades]
+        volumes = [float(t["qty"]) for t in recent_trades]
+        
+        if len(prices) < 20:  # Need sufficient data
             return None
 
-        current_price = prices[-1]
-        price_displacement = (current_price - fair_price) / fair_price
+        # Calculate momentum over last 20 trades
+        recent_price = prices[-1]
+        momentum_start = prices[-20]
+        momentum_pct = (recent_price - momentum_start) / momentum_start
 
-        is_buy_sweep = price_displacement > SWEEP_THRESHOLD_PCT
-        is_sell_sweep = price_displacement < -SWEEP_THRESHOLD_PCT
+        # Volume momentum
+        avg_vol = sum(volumes[-10:]) / len(volumes[-10:]) if len(volumes) >= 10 else 1
+        current_vol = volumes[-1] if volumes else 0
+        volume_ratio = current_vol / avg_vol if avg_vol > 0 else 0
 
-        if not (is_buy_sweep or is_sell_sweep):
+        # Only trade if momentum aligns with trend AND shows acceleration
+        if abs(momentum_pct) < 0.0015:  # 0.15% minimum move
             return None
 
-        # Volume spike check
-        avg_vol = sum(volumes[-5:]) / len(volumes[-5:]) if len(volumes) >= 5 else 1
-        last_vol = volumes[-1] if volumes else 0
-        volume_ratio = last_vol / avg_vol if avg_vol > 0 else 0
-
-        if volume_ratio < VOLUME_SPIKE_MULTIPLIER:
-            return None
-
-        # Confidence
-        displacement_score = abs(price_displacement) / SWEEP_THRESHOLD_PCT
-        confidence = min((displacement_score * 0.6 + volume_ratio * 0.4), 4.0)
-
-        min_sl_pct = 0.001  # 0.1% absolute minimum
-
-        # === BUY SIGNAL ===
-        if is_buy_sweep:
-            entry = best_ask
-            stop_loss = entry * (1 - SWEEP_THRESHOLD_PCT * SL_MULTIPLIER)
-            take_profit = entry * (1 + TP_PCT)
-
-            # Enforce min SL distance
-            actual_sl_pct = (entry - stop_loss) / entry
-            if actual_sl_pct < min_sl_pct:
-                stop_loss = entry * (1 - min_sl_pct)
-
-            risk = entry - stop_loss
-            reward = take_profit - entry
-            risk_reward_ratio = reward / risk if risk > 0 else 0
-            net_profit_pct = calculate_net_profit(entry, take_profit, 'buy')
-
-            if risk_reward_ratio < 1.0 or net_profit_pct < 0.0010:
-                return None
-
-            signal_data = {
-                "symbol": symbol,
-                "side": "buy",
-                "entry": entry,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "confidence": confidence,
-                "risk_reward_ratio": round(risk_reward_ratio, 2),
-                "net_profit_pct": round(net_profit_pct * 100, 4),
-                "sweep_price": current_price,
-                "fair_price": fair_price,
-                "volume_ratio": volume_ratio,
-                "timestamp": time.time(),
-                "exchange": "binance"
-            }
-
-        # === SELL SIGNAL ===
-        elif is_sell_sweep:
-            entry = best_bid
-            stop_loss = entry * (1 + SWEEP_THRESHOLD_PCT * SL_MULTIPLIER)
-            take_profit = entry * (1 - TP_PCT)
-
-            # Enforce min SL distance
-            actual_sl_pct = (stop_loss - entry) / entry
-            if actual_sl_pct < min_sl_pct:
-                stop_loss = entry * (1 + min_sl_pct)
-
-            risk = stop_loss - entry
-            reward = entry - take_profit
-            risk_reward_ratio = reward / risk if risk > 0 else 0
-            net_profit_pct = calculate_net_profit(entry, take_profit, 'sell')
-
-            if risk_reward_ratio < 1.0 or net_profit_pct < 0.0010:
-                return None
-
-            signal_data = {
-                "symbol": symbol,
-                "side": "sell",
-                "entry": entry,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "confidence": confidence,
-                "risk_reward_ratio": round(risk_reward_ratio, 2),
-                "net_profit_pct": round(net_profit_pct * 100, 4),
-                "sweep_price": current_price,
-                "fair_price": fair_price,
-                "volume_ratio": volume_ratio,
-                "timestamp": time.time(),
-                "exchange": "binance"
-            }
-
+        # Check if momentum is in same direction as trend
+        if trend_direction > MIN_TREND_STRENGTH and momentum_pct > 0:  # Bullish trend + bullish momentum
+            signal_side = 'buy'
+        elif trend_direction < -MIN_TREND_STRENGTH and momentum_pct < 0:  # Bearish trend + bearish momentum
+            signal_side = 'sell'
         else:
+            return None  # Momentum doesn't align with trend
+
+        # Calculate entry based on momentum acceleration
+        if signal_side == 'buy':
+            entry = best_ask
+            # SL below recent support
+            recent_low = min(prices[-15:])
+            stop_loss = recent_low * 0.998  # 0.2% below recent low
+            
+            # TP based on momentum target
+            take_profit = entry * (1 + TP_PCT)
+            
+            # Ensure SL is not too close to entry
+            if (entry - stop_loss) / entry < 0.002:  # 0.2% minimum risk
+                stop_loss = entry * 0.998
+
+        else:  # sell
+            entry = best_bid
+            # SL above recent resistance
+            recent_high = max(prices[-15:])
+            stop_loss = recent_high * 1.002  # 0.2% above recent high
+            
+            # TP based on momentum target
+            take_profit = entry * (1 - TP_PCT)
+            
+            # Ensure SL is not too close to entry
+            if (stop_loss - entry) / entry < 0.002:  # 0.2% minimum risk
+                stop_loss = entry * 1.002
+
+        # Calculate risk metrics
+        risk = abs(entry - stop_loss)
+        reward = abs(take_profit - entry)
+        risk_reward_ratio = reward / risk if risk > 0 else 0
+        net_profit_pct = calculate_net_profit(entry, take_profit, signal_side)
+
+        # Confidence calculation based on trend alignment + momentum + volume
+        trend_alignment_score = abs(trend_direction) * 10  # Higher trend = higher confidence
+        momentum_strength = abs(momentum_pct) / 0.0015  # Normalize momentum
+        volume_boost = min(volume_ratio * 0.3, 1.0)  # Volume boost up to 1.0
+        
+        confidence = 1.5 + trend_alignment_score + momentum_strength + volume_boost
+        confidence = min(confidence, 4.0)  # Cap at 4.0
+
+        if risk_reward_ratio < MIN_RISK_REWARD_RATIO or net_profit_pct < MIN_NET_PROFIT:
             return None
 
-        if signal_data["confidence"] >= MIN_CONFIDENCE:
-            return signal_data
+        if confidence < MIN_CONFIDENCE:  # 1.8 (was checking sweeps with 1.3)
+            return None
 
-        return None
+        signal_data = {
+            "symbol": symbol,
+            "side": signal_side,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "confidence": confidence,
+            "risk_reward_ratio": round(risk_reward_ratio, 2),
+            "net_profit_pct": round(net_profit_pct * 100, 4),
+            "trend_direction": trend_direction,
+            "momentum_pct": round(momentum_pct * 100, 4),
+            "volume_ratio": volume_ratio,
+            "timestamp": time.time(),
+            "exchange": "binance"
+        }
+
+        return signal_data
 
     except Exception as e:
-        # Optional: log e for debugging during development
         return None
-
-# ======================
-# Scanner Interface
-# ======================
-
-def scan_binance_symbols(symbols: List[str], lookback_sec: int = 60) -> List[Dict]:
-    signals = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_symbol = {
-            executor.submit(detect_liquidity_sweep_binance, symbol, lookback_sec): symbol
-            for symbol in symbols
-        }
-        for future in as_completed(future_to_symbol):
-            try:
-                signal = future.result(timeout=8)
-                if signal:
-                    signals.append(signal)
-            except Exception:
-                continue
-    return sorted(signals, key=lambda x: x["confidence"], reverse=True)

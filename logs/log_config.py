@@ -24,21 +24,6 @@ class DateRotatingFileHandler(RotatingFileHandler):
             self.stream = self._open()
 
 
-# Configure Orderly trader logger
-trader_logger = logging.getLogger('trader_logger')
-if not trader_logger.hasHandlers():
-    trader_logger.setLevel(logging.DEBUG)
-
-    # Orderly file handler
-    orderly_handler = DateRotatingFileHandler(
-        os.path.join(os.path.dirname(__file__), 'orderly_trader.log'), 
-        maxBytes=5*1024*1024, 
-        backupCount=5  # Changed from 0 to keep some backups
-    )
-    orderly_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    orderly_handler.setFormatter(formatter)
-    trader_logger.addHandler(orderly_handler)
 
 # Configure Binance trader logger
 binance_trader_logger = logging.getLogger('binance_trader_logger')
