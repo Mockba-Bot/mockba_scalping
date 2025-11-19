@@ -1,0 +1,21 @@
+services:
+  micro-mockba-scalping:
+    image: andresdom2004/micro-mockba-scalping:latest
+    container_name: micro-mockba-scalping
+    restart: always
+    env_file: 
+      - .env  # Load environment variables for Micro Central
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower-historical
+    restart: always
+    depends_on:
+      - micro-mockba-scalping
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300  # Check for updates every 5 minutes
+      - WATCHTOWER_LIFECYCLE_HOOKS=true  # Ensure containers restart properly after an update
+      - WATCHTOWER_LABEL_ENABLE=true  # Only update containers with the `com.centurylinklabs.watchtower.enable=true` label
