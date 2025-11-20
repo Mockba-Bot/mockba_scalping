@@ -3,11 +3,12 @@ import math
 import time
 import json
 from dotenv import load_dotenv
-from binance.client import Client
-from binance.enums import *
-from binance.exceptions import BinanceAPIException
+from python_binance import Client
+from python_binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
+from python_binance.exceptions import BinanceAPIException
 import redis
 import sys
+from send_bot_message import send_bot_message
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,14 +24,20 @@ client = Client(
 )
 
 # Redis
+redis_client = None
 try:
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = int(os.getenv('REDIS_PORT', 6379))
     redis_client = redis.StrictRedis(
-        host=os.getenv('REDIS_HOST', 'localhost'),
-        port=int(os.getenv('REDIS_PORT', 6379)),
+        host=redis_host,
+        port=redis_port,
         db=0,
-        decode_responses=True
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=5
     )
     redis_client.ping()
+    logger.info(f"Redis connected to {redis_host}:{redis_port}")
 except Exception as e:
     logger.error(f"Redis connection failed: {e}")
     redis_client = None
@@ -85,9 +92,15 @@ def get_futures_exchange_info(symbol: str):
 def get_available_balance(asset: str = "USDT") -> float:
     try:
         account = client.futures_account()
+        if 'assets' not in account:
+            logger.error("Invalid futures account response")
+            return 0.0
         for asset_info in account['assets']:
             if asset_info['asset'] == asset:
-                return float(asset_info['availableBalance'])
+                balance = float(asset_info.get('availableBalance', 0))
+                logger.info(f"Available {asset} balance: {balance}")
+                return balance
+        logger.warning(f"Asset {asset} not found in futures account")
     except Exception as e:
         logger.error(f"Failed to get balance: {e}")
     return 0.0
@@ -100,7 +113,9 @@ def set_leverage(symbol: str, leverage: int):
         logger.error(f"Failed to set leverage for {symbol}: {e}")
 
 def round_step_size(quantity: float, step_size: float) -> float:
-    precision = int(round(-math.log(step_size, 10), 0))
+    if step_size <= 0:
+        return quantity
+    precision = max(0, int(round(-math.log(step_size, 10), 0)))
     return round(quantity - (quantity % step_size), precision)
 
 def calculate_position_size_with_margin_cap(signal: dict, available_balance: float, leverage: int, symbol_info: dict) -> float:
@@ -120,10 +135,21 @@ def calculate_position_size_with_margin_cap(signal: dict, available_balance: flo
         logger.warning("Invalid stop loss placement")
         return 0.0
 
+    # Prevent division by zero
+    if risk_per_unit < 1e-10:  # Very small risk per unit
+        logger.warning("Risk per unit too small, skipping trade")
+        return 0.0
+
     qty_by_risk = risk_amount / risk_per_unit
 
     # Margin-based cap - SAFER
     max_notional = available_balance * leverage * 0.5  # 50% of available margin (was 75%)
+    
+    # Prevent division by zero for entry price
+    if entry <= 0:
+        logger.warning("Invalid entry price")
+        return 0.0
+        
     qty_by_margin = max_notional / entry
 
     qty = min(qty_by_risk, qty_by_margin)
@@ -253,6 +279,21 @@ def place_futures_order(signal: dict):
         logger.info(f"Stop-loss market order placed: {sl_id} @ {sl_price}")
 
         logger.info(f"✅ FULL POSITION OPENED: {symbol} | {side} | Qty: {qty} | Notional: ${notional:.2f}")
+
+        # Build the message for the bot
+        confirmation_msg = (
+            f"🚨 BINANCE - Scalp Signal Detected!\n"
+            f"✅ POSITION OPENED\n"
+            f"Symbol: {symbol}\n"
+            f"Side: {signal['side'].upper()}\n"
+            f"Qty: {qty:.6f}\n"
+            f"Entry: {signal['entry']:.4f}\n"
+            f"TP: {signal['take_profit']:.4f} (MARKET)\n"
+            f"SL: {signal['stop_loss']:.4f} (MARKET)\n"
+            f"⚠️ Auto-closing on TP/SL hit"
+        )
+        send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), confirmation_msg)
+
         return {
             'entry_order_id': entry_id,
             'tp_order_id': tp_id,

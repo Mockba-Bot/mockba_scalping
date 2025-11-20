@@ -7,9 +7,9 @@ from datetime import datetime
 # List of scripts to run (relative to project root)
 scripts = [
     # binance futures perp scalping bot
-    "futures_perps/scalping/binance/main.py",
-    # arbitrage scanner
-    # "divergences/scanner.py"
+    "futures_perps/trade/binance/main.py",
+    # Telegram bot for user interaction
+    "telegram.py",
 ]
 
 def log(msg):
