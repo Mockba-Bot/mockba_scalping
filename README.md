@@ -120,11 +120,7 @@ Este documento te guiará paso a paso para desplegar tu propio **Mockba Trader B
 2. [Configurar Bot de Telegram](#-configurar-bot-de-telegram)  
 3. [Obtener API Keys de Binance](#-obtener-api-keys-de-binance)  
 4. [Obtener API Key de DeepSeek](#-obtener-api-key-de-deepseek)  
-5. [⚙️ Configuración del Bot](#️-configuración-del-bot)  
-6. [🎮 Comandos de Gestión](#-comandos-de-gestión)  
-7. [🔧 Solución de Problemas](#-solución-de-problemas)  
-8. [📞 Soporte](#-soporte)
-
+5. [⚙️ Configuración del Bot](#️-configuración-del-bot) 
 ---
 
 ## 🖥️ Crear un VPS en DigitalOcean
@@ -214,12 +210,6 @@ Después de clonar e instalar el proyecto, edita el archivo de entorno:
 
 nano /opt/mockba-trader/.env
 
-# 🤖 Mockba Trader Bot – Guía Completa de Configuración
-
-Este repositorio contiene todo lo necesario para desplegar tu propio **Mockba Trader Bot** en un VPS usando Docker, conectado a **Binance Futures**, **DeepSeek LLM**, y **Telegram**.
-
-> ⚠️ **Importante**: Binance bloquea conexiones desde EE.UU. y algunos proxies. Usa un VPS en una región **fuera de EE.UU.** (como **Frankfurt, Alemania**).
-
 ---
 
 ## 📋 Requisitos del VPS
@@ -246,3 +236,4 @@ curl -fsSL https://raw.githubusercontent.com/Mockba-Bot/mockba_trader_binance/ma
 
 Este proyecto es de código abierto. Úsalo bajo tu propio riesgo.</content>
 <parameter name="filePath">/home/andres/vsCodeProjects/Python/MockbaV4/mockba_trader_binance/README.md
+
