@@ -11,7 +11,7 @@ services:
 
   watchtower:
     image: containrrr/watchtower
-    container_name: watchtower-historical
+    container_name: watchtower-binance
     restart: always
     depends_on:
       - micro-mockba-binance-futures-bot  # Fixed to match the correct service name
