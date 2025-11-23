@@ -8,6 +8,7 @@ from binance.exceptions import BinanceAPIException
 import redis
 import sys
 from trading_bot.send_bot_message import send_bot_message
+from db.db_ops import insert_position_with_orders
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -280,6 +281,24 @@ def place_futures_order(signal: dict):
             f"⚠️ Auto-closing on TP/SL hit"
         )
         send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), confirmation_msg)
+
+        # store position in database
+        insert_position_with_orders(
+            chat_id=int(os.getenv("TELEGRAM_CHAT_ID")),
+            signal=signal,
+            order_result={
+                'entry_order_id': entry_id,
+                'tp_order_id': tp_id,
+                'sl_order_id': sl_id,
+                'quantity': qty,
+                'notional': notional,
+                'entry_order_id': entry_id,
+                'tp_order_id': tp_id,
+                'sl_order_id': sl_id
+            },
+            exchange="BINANCE"
+        )
+
 
         return {
             'entry_order_id': entry_id,
