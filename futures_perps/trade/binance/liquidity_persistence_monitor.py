@@ -176,51 +176,38 @@ def get_cex_futures_data(symbol: str):
     return data, errors  # ← Return both data AND errors    
 
 
-def validate_cex_consensus_for_dex_asset(dex_symbol: str, tolerance_pct: float = 0.3) -> dict:
+def validate_cex_consensus_for_dex_asset(symbol: str, tolerance_pct: float = 0.3) -> dict:
     """
-    Validates CEX consensus for a DEX asset (e.g., 'PERP_BTC_USDC').
-
-    Converts: PERP_XYZ_USDC → XYZUSDT
+    Validates CEX consensus for a given symbol (e.g., 'BTCUSDT', 'SOLUSDT', 'BTCUSD').
 
     Returns:
     {
         "consensus": "HIGH" | "MEDIUM" | "LOW" | "NO_CEX_PAIR",
         "reason": str,
-        "cex_symbol": str | None,
+        "cex_symbol": str,
         "data": dict | None,
         "errors": dict | None
     }
     """
-    # --- STEP 1: Convert PERP_BTC_USDC → BTCUSDT generically
-    if not isinstance(dex_symbol, str):
+    if not isinstance(symbol, str) or not symbol:
         return {
             "consensus": "NO_CEX_PAIR",
-            "reason": f"Invalid input type for asset: {type(dex_symbol)}",
+            "reason": f"Invalid symbol input: {repr(symbol)}",
             "cex_symbol": None,
             "data": None,
             "errors": None
         }
 
-    # Remove 'PERP_' prefix and '_USDC' suffix in one go
-    if dex_symbol.startswith("PERP_") and dex_symbol.endswith("_USDC"):
-        base = dex_symbol[5:-5]  # strip "PERP_" and "_USDC"
-        if not base or not base.isalpha():
-            cex_symbol = None
-        else:
-            cex_symbol = base + "USDT"
-    else:
-        cex_symbol = None
+    # Normalize symbol: ensure uppercase, remove underscores if any (e.g., BTC_USDT → BTCUSDT)
+    cex_symbol = symbol.replace("_", "").upper()
 
-    if cex_symbol is None:
-        return {
-            "consensus": "NO_CEX_PAIR",
-            "reason": f"Unrecognized DEX symbol format: '{dex_symbol}'. Expected PERP_XXX_USDC.",
-            "cex_symbol": None,
-            "data": None,
-            "errors": None
-        }
+    # Special case: BTCUSD on Binance Futures is actually BTCUSD_PERP, but Binance USD-M uses BTCUSDT
+    # Since your bot trades USDT-margined futures (based on context), assume all pairs are USDT-based.
+    # If you get "BTCUSD", convert to "BTCUSDT" for consistency with Binance USD-M.
+    if cex_symbol.endswith("USD") and not cex_symbol.endswith("USDT"):
+        cex_symbol = cex_symbol + "T"  # BTCUSD → BTCUSDT
 
-    # --- STEP 2: Fetch CEX data
+    # Fetch CEX data
     try:
         cex_data, cex_errors = get_cex_futures_data(cex_symbol)
     except Exception as e:
@@ -232,13 +219,11 @@ def validate_cex_consensus_for_dex_asset(dex_symbol: str, tolerance_pct: float =
             "errors": {"all": str(e)}
         }
 
-    # --- STEP 3: Check responses
     all_exchanges = ['binance', 'bybit', 'okx']
     succeeded = [ex for ex in all_exchanges if ex in cex_data]
 
-    # If no exchange responded
     if len(succeeded) == 0:
-        # Heuristic: likely symbol not listed
+        # Check if all errors suggest symbol not found
         symbol_err_keywords = ["symbol", "instrument", "not found", "invalid"]
         not_found_count = sum(
             any(kw in err.lower() for kw in symbol_err_keywords)
@@ -247,7 +232,7 @@ def validate_cex_consensus_for_dex_asset(dex_symbol: str, tolerance_pct: float =
         if not_found_count == len(cex_errors):
             return {
                 "consensus": "NO_CEX_PAIR",
-                "reason": f"Asset {cex_symbol} not listed on major CEX futures markets",
+                "reason": f"Symbol {cex_symbol} not listed on major CEX futures markets",
                 "cex_symbol": cex_symbol,
                 "data": cex_data,
                 "errors": cex_errors
@@ -270,7 +255,7 @@ def validate_cex_consensus_for_dex_asset(dex_symbol: str, tolerance_pct: float =
             "errors": cex_errors
         }
 
-    # --- STEP 4: Consensus logic
+    # Consensus logic
     valid = {k: v for k, v in cex_data.items() if v is not None}
     prices = [v['price'] for v in valid.values()]
     fundings = [v['funding_rate'] for v in valid.values()]
