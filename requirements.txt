@@ -30,6 +30,7 @@ psycopg2-binary==2.9.11
 pycares==4.11.0
 pycparser==2.23
 pycryptodome==3.23.0
+pydantic==2.12.4
 pydantic_core==2.41.5
 pyTelegramBotAPI==4.29.1
 python-binance==1.0.30

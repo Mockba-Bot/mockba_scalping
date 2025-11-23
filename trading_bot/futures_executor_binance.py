@@ -1,14 +1,13 @@
 import os
 import math
-import time
 import json
 from dotenv import load_dotenv
-from python_binance import Client
-from python_binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
-from python_binance.exceptions import BinanceAPIException
+from binance.client import Client
+from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
+from binance.exceptions import BinanceAPIException
 import redis
 import sys
-from send_bot_message import send_bot_message
+from trading_bot.send_bot_message import send_bot_message
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,22 +23,12 @@ client = Client(
 )
 
 # Redis
-redis_client = None
+# Initialize Redis connection
 try:
-    redis_host = os.getenv('REDIS_HOST', 'localhost')
-    redis_port = int(os.getenv('REDIS_PORT', 6379))
-    redis_client = redis.StrictRedis(
-        host=redis_host,
-        port=redis_port,
-        db=0,
-        decode_responses=True,
-        socket_connect_timeout=5,
-        socket_timeout=5
-    )
+    redis_client = redis.from_url(os.getenv("REDIS_URL"))
     redis_client.ping()
-    logger.info(f"Redis connected to {redis_host}:{redis_port}")
-except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
+except redis.ConnectionError as e:
+    print(f"Redis connection error: {e}")
     redis_client = None
 
 # Risk parameters - SAFER VALUES

@@ -40,21 +40,3 @@ if not binance_trader_logger.hasHandlers():
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     binance_handler.setFormatter(formatter)
     binance_trader_logger.addHandler(binance_handler)  # ✅ CORRECT - adding to binance logger
-
-
-
-# Configure Scalping logger
-scalping_logger = logging.getLogger('scalping_logger')
-if not scalping_logger.hasHandlers():
-    scalping_logger.setLevel(logging.DEBUG)
-
-    # Scalping file handler
-    scalping_handler = DateRotatingFileHandler(
-        os.path.join(os.path.dirname(__file__), 'scalping.log'), 
-        maxBytes=5*1024*1024, 
-        backupCount=5  # Changed from 0 to keep some backups
-    )
-    scalping_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    scalping_handler.setFormatter(formatter)
-    scalping_logger.addHandler(scalping_handler)

@@ -1,14 +1,12 @@
 import json
-import pandas as pd
-import io
 import requests
 import os
-from datetime import datetime
 import threading
 import time
 import sys
 import re
 import redis
+from pydantic import BaseModel
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
@@ -233,6 +231,12 @@ def process_signal():
             logger.error(f"Failed to fetch signals: {response.status_code}")
             time.sleep(30)
             continue
+
+        # If the ressponse if a empty list, skip
+        if response.json() == []:
+            logger.info("No active signals received.")
+            time.sleep(30)
+            continue
         
         signals = response.json()  # List of signal dicts
 
@@ -359,6 +363,9 @@ def position_monitor_loop():
 if __name__ == "__main__":
     # Check for tables
     initialize_database_tables()
+
+    # Start signal processing
+    process_signal()
 
     # # start monitoring
     monitor_thread = threading.Thread(target=position_monitor_loop, daemon=True)
