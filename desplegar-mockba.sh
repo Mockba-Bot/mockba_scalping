@@ -22,11 +22,6 @@ imprimir_error() {
     echo -e "${ROJO}❌ $1${NC}"
 }
 
-# Verificar si se ejecuta como root
-if [ "$EUID" -eq 0 ]; then
-    imprimir_error "Por favor no ejecutes como root. Usa un usuario normal."
-    exit 1
-fi
 
 # Crear directorio del proyecto
 DIRECTORIO_PROYECTO="$HOME/mockba-trader"
