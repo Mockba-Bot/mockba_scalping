@@ -178,8 +178,8 @@ def get_cex_futures_data(symbol: str):
 
 def validate_cex_consensus_for_dex_asset(symbol: str, tolerance_pct: float = 0.3) -> dict:
     """
-    Validates CEX consensus for a given symbol (e.g., 'BTCUSDT', 'SOLUSDT', 'BTCUSD').
-
+    Validates CEX consensus for a standard symbol (e.g., 'BTCUSDT', 'SOLUSDT', 'BTCUSD').
+    
     Returns:
     {
         "consensus": "HIGH" | "MEDIUM" | "LOW" | "NO_CEX_PAIR",
@@ -198,12 +198,10 @@ def validate_cex_consensus_for_dex_asset(symbol: str, tolerance_pct: float = 0.3
             "errors": None
         }
 
-    # Normalize symbol: ensure uppercase, remove underscores if any (e.g., BTC_USDT → BTCUSDT)
+    # Normalize symbol: ensure uppercase, remove underscores if any
     cex_symbol = symbol.replace("_", "").upper()
-
-    # Special case: BTCUSD on Binance Futures is actually BTCUSD_PERP, but Binance USD-M uses BTCUSDT
-    # Since your bot trades USDT-margined futures (based on context), assume all pairs are USDT-based.
-    # If you get "BTCUSD", convert to "BTCUSDT" for consistency with Binance USD-M.
+    
+    # Special case: BTCUSD → BTCUSDT (for Binance USD-M futures)
     if cex_symbol.endswith("USD") and not cex_symbol.endswith("USDT"):
         cex_symbol = cex_symbol + "T"  # BTCUSD → BTCUSDT
 
