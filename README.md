@@ -234,6 +234,5 @@ curl -fsSL https://raw.githubusercontent.com/Mockba-Bot/mockba_trader_binance/ma
 
 ## Licencia
 
-Este proyecto es de código abierto. Úsalo bajo tu propio riesgo.</content>
-<parameter name="filePath">/home/andres/vsCodeProjects/Python/MockbaV4/mockba_trader_binance/README.md
+Este proyecto es de código abierto. Úsalo bajo tu propio riesgo. MIT Licence
 
