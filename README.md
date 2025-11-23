@@ -212,7 +212,6 @@ Este documento te guiará paso a paso para desplegar tu propio **Mockba Trader B
 
 Después de clonar e instalar el proyecto, edita el archivo de entorno:
 
-```bash
 nano /opt/mockba-trader/.env
 
 # 🤖 Mockba Trader Bot – Guía Completa de Configuración
@@ -240,7 +239,6 @@ Este repositorio contiene todo lo necesario para desplegar tu propio **Mockba Tr
 
 Ejecuta este comando **una sola vez** en tu VPS recién creado:
 
-```bash
 curl -fsSL https://raw.githubusercontent.com/Mockba-Bot/mockba_trader_binance/main/desplegar-mockba.sh | bash
 
 
