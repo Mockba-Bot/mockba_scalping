@@ -170,19 +170,12 @@ def calculate_position_size_with_margin_cap(signal: dict, available_balance: flo
 def place_futures_order(signal: dict):
     symbol = signal['symbol']
     side = signal['side'].upper()
-    confidence = signal['confidence']
-    confidence_level = get_confidence_level(confidence)
-
-    if confidence_level not in LEVERAGE_MAP or LEVERAGE_MAP[confidence_level] == 0:
-        logger.info(f"Signal too weak ({confidence_level}), skipping: {symbol}")
+    
+    leverage = signal.get('leverage')
+    if leverage is None or leverage <= 0:
+        logger.error(f"Invalid leverage in signal: {leverage}")
         return None
-
-    # SAFER: Check minimum confidence level
-    if confidence < 2.0:  # Only trade STRONG+ signals (was 1.8)
-        logger.info(f"Confidence too low ({confidence:.2f} < 2.0), skipping: {symbol}")
-        return None
-
-    leverage = LEVERAGE_MAP[confidence_level]
+   
     info = get_futures_exchange_info(symbol)
     if not info:
         logger.error(f"Could not get symbol info for {symbol}")

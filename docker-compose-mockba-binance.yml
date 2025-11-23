@@ -1,17 +1,20 @@
 services:
-  micro-mockba-scalping:
-    image: andresdom2004/micro-mockba-scalping:latest
-    container_name: micro-mockba-scalping
+  micro-mockba-binance-futures-bot:
+    image: andresdom2004/micro-mockba-binance-futures-bot:latest
+    container_name: micro-mockba-binance-futures-bot
     restart: always
     env_file: 
       - .env  # Load environment variables for Micro Central
+    volumes:
+      - ./.env:/app/.env  # Mount .env for editing
+      - ./llm_prompt_template.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt  # Mount prompt template for user editing
 
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower-historical
     restart: always
     depends_on:
-      - micro-mockba-scalping
+      - micro-mockba-binance-futures-bot  # Fixed to match the correct service name
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

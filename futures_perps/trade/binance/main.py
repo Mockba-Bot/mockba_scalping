@@ -1,8 +1,5 @@
-from fastapi import FastAPI, UploadFile, File
-from pydantic import BaseModel
-from typing import Optional
-import pandas as pd
 import json
+import pandas as pd
 import io
 import requests
 import os
@@ -11,21 +8,31 @@ import threading
 import time
 import sys
 import re
-import uvicorn
+import redis
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from db.db_ops import get_open_positions, update_position_pnl, initialize_database_tables
+from db.db_ops import get_open_positions, update_position_pnl, initialize_database_tables, get_bot_status
 from logs.log_config import binance_trader_logger as logger
 from binance.client import Client as BinanceClient
 from trading_bot.send_bot_message import send_bot_message
-
-
-app = FastAPI()
+from historical_data import get_historical_data_limit_binance, get_orderbook
 
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
+
+# Initialize Redis connection
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    try:
+        redis_client = redis.from_url(redis_url)
+        redis_client.ping()
+    except redis.ConnectionError as e:
+        print(f"Redis connection error: {e}")
+        redis_client = None
+else:
+    redis_client = None
 
 
 # Import your executor
@@ -101,10 +108,35 @@ def get_current_balance():
         # Default to 20 if API call fails
         return 20.0
 
-def analyze_with_llm(signal_dict: dict, csv_content: str, orderbook_content: str) -> dict:
+# Helper: Format orderbook as text (not CSV!)
+def format_orderbook_as_text(ob: dict) -> str:
+    lines = ["Top Bids (price, quantity):"]
+    for price, qty in ob.get('bids', [])[:15]:
+        lines.append(f"{price},{qty}")
+    
+    lines.append("\nTop Asks (price, quantity):")
+    for price, qty in ob.get('asks', [])[:15]:
+        lines.append(f"{price},{qty}")
+    
+    return "\n".join(lines)
+
+
+def analyze_with_llm(signal_dict: dict) -> dict:
     """Send to LLM for detailed analysis using fixed prompt structure."""
     
-    # --- 1. Static mandatory intro ---
+    # ✅ Get DataFrame with ALL indicators (your function handles timeframe logic)
+    df = get_historical_data_limit_binance(
+        symbol=signal_dict['asset'],
+        interval=signal_dict['timeframe'],
+        limit=80
+    )
+    csv_content = df.to_csv(index=False)  # ← Preserves all columns automatically
+
+    # ✅ Get orderbook as TEXT (not CSV!)
+    orderbook = get_orderbook(signal_dict['asset'], limit=20)
+    orderbook_content = format_orderbook_as_text(orderbook)  # ← See helper below
+
+    # --- Rest of your prompt logic (unchanged) ---
     intro = (
         "You are an experienced retail crypto trader with 10 years of experience.\n"
         "Analyze the attached CSV (80 candles) and orderbook for the given signal.\n\n"
@@ -118,13 +150,10 @@ def analyze_with_llm(signal_dict: dict, csv_content: str, orderbook_content: str
         f"• Volatility (1h): {signal_dict['volatility_1h']}%\n\n"
     )
 
-    # --- 2. Load middle section (TASKS + RULES) from .txt ---
-    analysis_logic = load_prompt_template()  # reads only the TASKS+RULES part
-
-    # --- 3. Static mandatory response format ---
+    analysis_logic = load_prompt_template()
     account_size = get_current_balance()
     max_leverage = int(os.getenv("MAX_LEVERAGE_SMALL", "3"))
-    max_loss = account_size * 0.015  # 1.5% risk
+    max_loss = account_size * 0.015
 
     response_format = (
         "\nRESPONSE FORMAT:\n"
@@ -137,11 +166,7 @@ def analyze_with_llm(signal_dict: dict, csv_content: str, orderbook_content: str
         "• Trap Risk: [High/Medium/Low - based on orderbook imbalances]\n"
     )
 
-    # --- Combine all three parts ---
     prompt = intro + analysis_logic + response_format
-
-    # --- Inject dynamic values into the middle section ---
-    # Since analysis_logic contains placeholders like {account_size}, we format the whole prompt
     prompt = prompt.format(
         account_size=account_size,
         max_leverage=max_leverage,
@@ -151,15 +176,12 @@ def analyze_with_llm(signal_dict: dict, csv_content: str, orderbook_content: str
     # --- Send to DeepSeek ---
     response = requests.post(
         "https://api.deepseek.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {os.getenv('DEEP_SEEK_API_KEY')}",
-            "Content-Type": "application/json"
-        },
+        headers={"Authorization": f"Bearer {os.getenv('DEEP_SEEK_API_KEY')}"},
         json={
             "model": "deepseek-chat",
             "messages": [
                 {"role": "user", "content": prompt},
-                {"role": "user", "content": f"Candle \n{csv_content}"},
+                {"role": "user", "content": f"Candles (CSV format):\n{csv_content}"},
                 {"role": "user", "content": f"Orderbook:\n{orderbook_content}"}
             ],
             "temperature": 0.1,
@@ -173,11 +195,9 @@ def analyze_with_llm(signal_dict: dict, csv_content: str, orderbook_content: str
     return {"analysis": "LLM analysis failed", "approved": False}
 
 
-def parse_llm_response(llm_analysis: str, original_signal: TradingSignal) -> dict:
+def parse_llm_response(llm_analysis: str, original_signal: dict) -> dict:
     """Parse LLM response to extract entry/SL/TP"""
     # Extract prices from LLM response using regex or string parsing
-    import re
-    
     # Look for price patterns in the LLM response
     # Example: "entry zone (0.6320–0.6340)" or "SL above 0.6350"
     entry_match = re.search(r'entry.*?(\d+\.\d+)', llm_analysis.lower())
@@ -186,246 +206,115 @@ def parse_llm_response(llm_analysis: str, original_signal: TradingSignal) -> dic
     
     if entry_match and sl_match and tp_match:
         return {
-            "symbol": original_signal.asset,
-            "side": original_signal.signal,
+            "symbol": original_signal['asset'],
+            "side": "LONG" if original_signal['signal'] == 1 else "SHORT",
             "entry": float(entry_match.group(1)),
             "stop_loss": float(sl_match.group(1)),
             "take_profit": float(tp_match.group(1)),
-            "confidence": original_signal.confidence
+            "confidence": original_signal['confidence_percent']
         }
     return None
 
-# Add this function to your main.py
-def micro_backtest(
-    df: pd.DataFrame,
-    direction: int,
-    tp_pct: float = 0.006,
-    sl_pct: float = 0.008,
-    max_bars: int = 8,
-    fee_bps: float = 0.0,
-    slip_bps: float = 0.0,
-):
-    """
-    direction: 1 (long) or -1 (short).
-    Entry at close[t]. Exit when TP/SL is touched using high/low of subsequent bars.
-    Costs: fee_bps and slip_bps are round-trip costs, in basis points (e.g., 8 = 0.08%).
-    Returns: dict(trades, winrate, avg_ret, exp, max_dd) using *net* returns after costs.
-    """
-    import pandas as pd
-    import numpy as np
-    
-    if direction == 0 or df.shape[0] < (max_bars + 2):
-        return {"trades": 0, "winrate": 0.0, "avg_ret": 0.0, "exp": 0.0, "max_dd": 0.0}
 
-    closes = pd.to_numeric(df["close"], errors="coerce").values
-    highs  = pd.to_numeric(df["high"],  errors="coerce").values
-    lows   = pd.to_numeric(df["low"],   errors="coerce").values
+def process_signal():
+    while True:
+        """Process incoming signal from Api bot with combined CSV + orderbook file"""
+        # Only proceed if bot is running
+        if not get_bot_status():
+            logger.info("Bot is paused. Waiting to resume...")
+            time.sleep(10)
+            continue
 
-    trades = 0
-    wins = 0
-    rets = []
-    equity = 1.0
-    peak = 1.0
-    max_dd = 0.0
+        # Get signal from Mockba ML
+        URL = "https://signal.globaldv.net/api/v1/signals/active?venue=CEX"
+        # The API is free, get no post
+        response = requests.get(URL)
+        if response.status_code != 200:
+            logger.error(f"Failed to fetch signals: {response.status_code}")
+            time.sleep(30)
+            continue
+        
+        signals = response.json()  # List of signal dicts
 
-    # convert bps → decimal cost per round trip
-    round_trip_cost = (float(fee_bps) + float(slip_bps)) * 1e-4
-
-    stride = 3
-    last_idx = len(closes) - max_bars - 1
-    for t in range(0, last_idx, stride):
-        entry = float(closes[t])
-
-        if direction == 1:
-            tp = entry * (1 + tp_pct)
-            sl = entry * (1 - sl_pct)
+        # Compare with Redis to avoid duplicates
+        if redis_client:
+            stored = redis_client.get("active_signals")
+            if stored:
+                stored_signals = json.loads(stored)
+                if stored_signals == signals:
+                    logger.info("Signals unchanged, skipping processing...")
+                    time.sleep(30)
+                    continue
+            # Store new signals (no expiration)
+            redis_client.set("active_signals", json.dumps(signals))
         else:
-            tp = entry * (1 - tp_pct)
-            sl = entry * (1 + sl_pct)
+            logger.warning("Redis not available, skipping deduplication")
 
-        exit_px = None
-
-        for k in range(1, max_bars + 1):
-            i = t + k
-            if i >= len(closes):
-                break
-
-            if direction == 1:
-                if highs[i] >= tp:
-                    exit_px = tp; break
-                if lows[i]  <= sl:
-                    exit_px = sl; break
+        # Process the single signal (API always returns one)
+        if signals:
+            signal = signals[0]
+            
+            # Get confidence level
+            confidence_level = get_confidence_level(signal['confidence_percent'])
+            
+            # Only proceed if confidence is moderate or higher
+            if confidence_level == "❌ WEAK":
+                logger.info(f"Skipping weak signal for {signal['asset']}")
+                time.sleep(30)
+                continue
+            
+            # --- MICRO BACKTEST CHECK ---
+            bt = signal.get('backtest', {})
+            
+            # Must have positive expectancy and enough trades
+            if bt.get("trades", 0) < 15 or bt.get("exp", 0.0) <= MICRO_BACKTEST_MIN_EXPECTANCY:
+                logger.info(f"❌ {signal['asset']} micro-backtest failed: {bt}")
+                time.sleep(30)
+                continue
+            
+            logger.info(f"✅ {signal['asset']} micro-backtest passed: {bt}")
+            
+            # Get leverage based on confidence
+            leverage = get_leverage_by_confidence(signal['confidence_percent'])
+            
+            # --- LIQUIDITY PERSISTENCE CHECK ---
+            cex_check = lpm.validate_cex_consensus_for_dex_asset(signal['asset'])
+            if cex_check["consensus"] == "NO_CEX_PAIR":
+                logger.info(f"🛑 {signal['asset']} CEX consensus check failed: {cex_check['reason']}")
+                time.sleep(30)
+                continue
+            elif cex_check["consensus"] == "LOW":
+                logger.info(f"❌ Skipping {signal['asset']}: LOW CEX consensus ({cex_check['reason']})")
+                time.sleep(30)
+                continue
             else:
-                if lows[i]  <= tp:
-                    exit_px = tp; break
-                if highs[i] >= sl:
-                    exit_px = sl; break
+                logger.info(f"✅ {signal['asset']} passed CEX consensus: {cex_check['reason']}")
+            
+            # Analyze with LLM
+            llm_result = analyze_with_llm(signal)
+            
+            if not llm_result["approved"]:
+                logger.info(f"LLM rejected signal for {signal['asset']}: {llm_result['analysis']}")
+                time.sleep(30)
+                continue
+            
+            # PARSE LLM RESULT to extract entry/SL/TP
+            parsed_signal = parse_llm_response(llm_result["analysis"], signal)
+            if not parsed_signal:
+                logger.info(f"Could not parse LLM response for {signal['asset']}")
+                time.sleep(30)
+                continue
 
-        if exit_px is None:
-            exit_px = float(closes[min(t + max_bars, len(closes) - 1)])
+            # 👇 ADD LEVERAGE TO PARSED SIGNAL
+            parsed_signal['leverage'] = leverage
+            
+            # Execute position using your existing executor
+            execution_result = place_futures_order(parsed_signal)
+            
+            logger.info(f"Execution result for {signal['asset']}: {execution_result}")
 
-        gross_ret = ((exit_px - entry) / entry) * direction
-        net_ret = gross_ret - round_trip_cost
-
-        trades += 1
-        wins += int(net_ret > 0)
-        rets.append(net_ret)
-
-        equity *= (1 + net_ret)
-        peak = max(peak, equity)
-        max_dd = min(max_dd, (equity / peak - 1.0))
-
-    winrate = wins / trades if trades else 0.0
-    avg_ret = float(np.mean(rets)) if rets else 0.0
-    exp = winrate * tp_pct - (1 - winrate) * sl_pct  # expectancy proxy (unchanged)
-
-    return {
-        "trades": trades,
-        "winrate": round(winrate, 3),
-        "avg_ret": round(avg_ret, 4),
-        "exp": round(exp, 4),
-        "max_dd": round(max_dd, 4),
-    }
-
-#helper
-def _normalize_ts(df: pd.DataFrame) -> pd.DataFrame:
-    """Create a unified 'ts' (UTC) column and sort ascending by it."""
-    d = df.copy()
-
-    # Try columns in priority order
-    ts = pd.Series(pd.NaT, index=d.index, dtype="datetime64[ns, UTC]")
-
-    if "timestamp" in d.columns:
-        ts = ts.fillna(pd.to_datetime(d["timestamp"], utc=True, errors="coerce"))
-
-    if "time" in d.columns:
-        # seconds or ms → datetime
-        t = pd.to_numeric(d["time"], errors="coerce")
-        if t.notna().any():
-            unit = "ms" if t.dropna().median() > 1e12/2 else "s"
-            ts = ts.fillna(pd.to_datetime(t, unit=unit, utc=True, errors="coerce"))
-
-    if "start_time" in d.columns:
-        t = pd.to_numeric(d["start_time"], errors="coerce")
-        if t.notna().any():
-            unit = "ms" if t.dropna().median() > 1e12/2 else "s"
-            ts = ts.fillna(pd.to_datetime(t, unit=unit, utc=True, errors="coerce"))
-
-    # DatetimeIndex as fallback
-    if isinstance(d.index, pd.DatetimeIndex):
-        index_ts = d.index.tz_convert("UTC") if d.index.tz is not None else d.index.tz_localize("UTC")
-        ts[ts.isna()] = index_ts[ts.isna()]
-
-    if ts.isna().all():
-        raise ValueError("No usable time column found for klines")
-
-    d["ts"] = ts
-    d = d.dropna(subset=["ts"])
-    # keep last if duplicates in the same ts
-    d = d.sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
-    return d
-
-def take_recent(df: pd.DataFrame, n: int = 400) -> pd.DataFrame:
-    d = _normalize_ts(df)
-    return d.tail(n)
-
-# Then modify your endpoint to include the backtest:
-@app.post("/process_binance_signal/")
-async def process_signal(
-    signal: TradingSignal,
-    combined_file: UploadFile = File(...)
-):
-    """Process incoming signal from Telegram bot with combined CSV + orderbook file"""
-    
-    # Read the combined file
-    combined_content = await combined_file.read()
-    combined_str = combined_content.decode('utf-8')
-    
-    # Split the content at the separator
-    if "# ORDERBOOK_SNAPSHOT" in combined_str:
-        csv_part, orderbook_part = combined_str.split("# ORDERBOOK_SNAPSHOT", 1)
-        csv_content = csv_part.strip()
-        orderbook_content = orderbook_part.strip()
-    else:
-        return {"status": "error", "reason": "No orderbook separator found in file"}
-    
-    # Parse CSV to DataFrame
-    try:
-        df = pd.read_csv(io.StringIO(csv_content))
-        if df.empty or len(df) < 20:  # Minimum candles needed
-            return {"status": "error", "reason": "Insufficient candle data in CSV"}
-    except Exception as e:
-        return {"status": "error", "reason": f"Invalid CSV format: {str(e)}"}
-    
-    # Get confidence level
-    confidence_level = get_confidence_level(signal.confidence)
-    
-    # Only proceed if confidence is moderate or higher
-    if confidence_level == "❌ WEAK":
-        return {"status": "rejected", "reason": "Low confidence signal"}
-    
-    # --- MICRO-BACKTEST VALIDATION ---
-    # Convert signal direction to 1/-1
-    direction = 1 if signal.signal.lower() == "long" else -1
-    
-    bt = micro_backtest(
-        take_recent(df, 80), 
-        direction=direction,
-        tp_pct=0.006,  # 0.6% target
-        sl_pct=0.008,  # 0.8% stop
-        max_bars=8,    # max 8 bars to close
-        fee_bps=10,    # 0.1% fees
-        slip_bps=6     # 0.06% slippage
-    )
-    
-    # Must have positive expectancy and enough trades
-    if bt.get("trades", 0) < 15 or bt.get("exp", 0.0) <= MICRO_BACKTEST_MIN_EXPECTANCY:
-        print(f"❌ {signal.asset} micro-backtest failed: {bt}")
-        return {
-            "status": "rejected", 
-            "reason": f"Micro-backtest failed - trades: {bt.get('trades', 0)}, exp: {bt.get('exp', 0.0)}"
-        }
-    
-    print(f"✅ {signal.asset} micro-backtest passed: {bt}")
-    
-    # Get leverage based on confidence
-    leverage = get_leverage_by_confidence(signal.confidence)
-    
-    # --- LIQUIDITY PERSISTENCE CHECK ---
-    cex_check = lpm.validate_cex_consensus_for_dex_asset(signal.asset)
-    if cex_check["consensus"] == "NO_CEX_PAIR":
-        print(f"🛑 {signal.asset} CEX consensus check failed: {cex_check['reason']}")
-        return {"status": "rejected", "reason": f"CEX consensus failed: {cex_check['reason']}"}
-    elif cex_check["consensus"] == "LOW":
-        print(f"❌ Skipping {signal.asset}: LOW CEX consensus ({cex_check['reason']})")
-        return {"status": "rejected", "reason": f"Low CEX consensus: {cex_check['reason']}"}
-    else:
-        print(f"✅ {signal.asset} passed CEX consensus: {cex_check['reason']}")
-    
-    # Analyze with LLM
-    llm_result = analyze_with_llm(signal.model_dump(), csv_content, orderbook_content)
-    
-    if not llm_result["approved"]:
-        return {"status": "rejected", "reason": "LLM analysis failed"}
-    
-    # PARSE LLM RESULT to extract entry/SL/TP
-    parsed_signal = parse_llm_response(llm_result["analysis"], signal)
-    if not parsed_signal:
-        return {"status": "rejected", "reason": "Could not parse LLM response for entry/SL/TP"}
-    
-    # Execute position using your existing executor
-    execution_result = place_futures_order(parsed_signal)
-    
-    return {
-        "status": "executed" if execution_result else "failed",
-        "confidence_level": confidence_level,
-        "leverage": leverage,
-        "execution": execution_result,
-        "llm_analysis": llm_result["analysis"],
-        "parsed_signal": parsed_signal,
-        "cex_check": cex_check,
-        "micro_backtest": bt
-    }
+        # Sleep for 30 seconds before next fetch
+        time.sleep(30)
 
 
 # Position monitoring thread (same as before)
@@ -474,5 +363,3 @@ if __name__ == "__main__":
     # # start monitoring
     monitor_thread = threading.Thread(target=position_monitor_loop, daemon=True)
     monitor_thread.start()
-
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("APP_PORT", 8000)))
