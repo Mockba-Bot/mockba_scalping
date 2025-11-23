@@ -108,7 +108,7 @@ Eres un trader experimentado. Analiza los datos y proporciona una recomendación
 - **Archivo no encontrado**: Asegúrate de que `llm_prompt_template.txt` exista en la raíz.
 
 
-# 🤖 Mockba Trader Bot – Guía Completa de Configuración
+# 🤖 Guía Completa de Configuración
 
 Este documento te guiará paso a paso para desplegar tu propio **Mockba Trader Bot** en un VPS usando Docker, conectado a Binance, DeepSeek y Telegram.
 
