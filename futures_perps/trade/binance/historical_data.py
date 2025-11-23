@@ -3,6 +3,7 @@ import os
 from typing import Dict, Optional
 import requests
 import pandas as pd
+import numpy as np
 from logs.log_config import binance_trader_logger as logger
 
 # === Binance Futures (USDT-M) Config ===

@@ -81,7 +81,7 @@ def get_leverage_by_confidence(confidence: float) -> int:
 def load_prompt_template():
     """Load LLM prompt from file"""
     try:
-        with open("llm_prompt_template.txt", "r") as f:
+        with open("futures_perps/trade/binance/llm_prompt_template.txt", "r") as f:
             return f.read()
     except FileNotFoundError:
         raise FileNotFoundError("llm_prompt_template.txt not found. Please create the prompt file.")
@@ -124,11 +124,13 @@ def analyze_with_llm(signal_dict: dict) -> dict:
     
     # ✅ Get DataFrame with ALL indicators (your function handles timeframe logic)
     df = get_historical_data_limit_binance(
-        symbol=signal_dict['asset'],
-        interval=signal_dict['timeframe'],
+        pair=signal_dict['asset'],
+        timeframe=signal_dict['interval'],
         limit=80
     )
     csv_content = df.to_csv(index=False)  # ← Preserves all columns automatically
+    # get the latest close price from the dataframe
+    latest_close_price = df['close'].iloc[-1]
 
     # ✅ Get orderbook as TEXT (not CSV!)
     orderbook = get_orderbook(signal_dict['asset'], limit=20)
@@ -141,35 +143,24 @@ def analyze_with_llm(signal_dict: dict) -> dict:
         f"• Asset: {signal_dict['asset']}\n"
         f"• Signal: {signal_dict['signal']}\n"
         f"• Confidence: {signal_dict['confidence']}%\n"
-        f"• Timeframe: {signal_dict['timeframe']}\n"
-        f"• Current Price: ${signal_dict['current_price']}\n"
+        f"• Timeframe: {signal_dict['interval']}\n"
+        f"• Current Price: ${latest_close_price}\n"
         f"• Liquidity Score: {signal_dict['liquidity_score']}\n"
         f"• Volume (1h): ${signal_dict['volume_1h']}\n"
         f"• Volatility (1h): {signal_dict['volatility_1h']}%\n\n"
     )
 
+     # Get leverage based on confidence
+    leverage = get_leverage_by_confidence(signal_dict['confidence_percent'])
+            
+
     analysis_logic = load_prompt_template()
-    account_size = get_current_balance()
-    max_leverage = int(os.getenv("MAX_LEVERAGE_SMALL", "3"))
-    max_loss = account_size * 0.015
 
     response_format = (
-        "\nRESPONSE FORMAT:\n"
-        "• Entry: [price]\n"
-        "• SL: [price]\n"
-        "• TP: [price]\n"
-        f"• Size: [quantity for ${account_size} account]\n"
-        "• Risk: [percentage of account risked]\n"
-        "• Reason: [1 sentence why this is a good/bad trade]\n"
-        "• Trap Risk: [High/Medium/Low - based on orderbook imbalances]\n"
+        f"\nRETURN ONLY JSON with keys: symbol, side, entry, take_profit, stop_loss, confidence: {signal_dict['confidence_percent']}, leverage: {leverage}\n"
     )
 
     prompt = intro + analysis_logic + response_format
-    prompt = prompt.format(
-        account_size=account_size,
-        max_leverage=max_leverage,
-        max_loss=f"{max_loss:.2f}"
-    )
 
     # --- Send to DeepSeek ---
     response = requests.post(
@@ -182,36 +173,17 @@ def analyze_with_llm(signal_dict: dict) -> dict:
                 {"role": "user", "content": f"Candles (CSV format):\n{csv_content}"},
                 {"role": "user", "content": f"Orderbook:\n{orderbook_content}"}
             ],
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_tokens": 500
         }
     )
     
     if response.status_code == 200:
         content = response.json()['choices'][0]['message']['content']
-        return {"analysis": content, "approved": True}
+        # Check if LLM approves the trade
+        approved = "DO NOT EXECUTE" not in content.upper()
+        return {"analysis": content, "approved": approved}
     return {"analysis": "LLM analysis failed", "approved": False}
-
-
-def parse_llm_response(llm_analysis: str, original_signal: dict) -> dict:
-    """Parse LLM response to extract entry/SL/TP"""
-    # Extract prices from LLM response using regex or string parsing
-    # Look for price patterns in the LLM response
-    # Example: "entry zone (0.6320–0.6340)" or "SL above 0.6350"
-    entry_match = re.search(r'entry.*?(\d+\.\d+)', llm_analysis.lower())
-    sl_match = re.search(r'sl.*?(\d+\.\d+)', llm_analysis.lower())
-    tp_match = re.search(r'tp.*?(\d+\.\d+)', llm_analysis.lower())
-    
-    if entry_match and sl_match and tp_match:
-        return {
-            "symbol": original_signal['asset'],
-            "side": "LONG" if original_signal['signal'] == 1 else "SHORT",
-            "entry": float(entry_match.group(1)),
-            "stop_loss": float(sl_match.group(1)),
-            "take_profit": float(tp_match.group(1)),
-            "confidence": original_signal['confidence_percent']
-        }
-    return None
 
 
 def process_signal():
@@ -239,6 +211,33 @@ def process_signal():
             continue
         
         signals = response.json()  # List of signal dicts
+        # Emulate json
+        # signals = [
+        # {
+        #     "asset": "LTCUSDT",
+        #     "signal": 1,
+        #     "confidence": 1,
+        #     "confidence_percent": 100,
+        #     "interval": "4h",
+        #     "venue": "CEX",
+        #     "score": 1,
+        #     "regime": "HIGH VOLATILITY",
+        #     "timestamp": "2025-11-23T22:19:30.249249+00:00",
+        #     "expires_at": 1763939970.249278,
+        #     "signal_id": "CEX_20251123_221930",
+        #     "liquidity_tier": "Unknown",
+        #     "liquidity_score": 7.28,
+        #     "volume_1h": 2483583.05,
+        #     "volatility_1h": 1.24,
+        #     "backtest": {
+        #     "trades": 131,
+        #     "winrate": 0.802,
+        #     "avg_ret": 0.0016,
+        #     "exp": 0.0032,
+        #     "max_dd": -0.0652
+        #     }
+        # }
+        # ]
 
         # Compare with Redis to avoid duplicates
         if redis_client:
@@ -257,7 +256,6 @@ def process_signal():
         # Process the single signal (API always returns one)
         if signals:
             signal = signals[0]
-            
             # Get confidence level
             confidence_level = get_confidence_level(signal['confidence_percent'])
             
@@ -278,9 +276,7 @@ def process_signal():
             
             logger.info(f"✅ {signal['asset']} micro-backtest passed: {bt}")
             
-            # Get leverage based on confidence
-            leverage = get_leverage_by_confidence(signal['confidence_percent'])
-            
+           
             # --- LIQUIDITY PERSISTENCE CHECK ---
             cex_check = lpm.validate_cex_consensus_for_dex_asset(signal['asset'])
             if cex_check["consensus"] == "NO_CEX_PAIR":
@@ -296,21 +292,37 @@ def process_signal():
             
             # Analyze with LLM
             llm_result = analyze_with_llm(signal)
-            
-            if not llm_result["approved"]:
-                logger.info(f"LLM rejected signal for {signal['asset']}: {llm_result['analysis']}")
+            print(llm_result["approved"])
+            if not bool(llm_result["approved"]):
+                logger.info(f"LLM rejected signal for {signal['asset']}: {llm_result['analysis'][:200]}...")
                 time.sleep(30)
                 continue
             
-            # PARSE LLM RESULT to extract entry/SL/TP
-            parsed_signal = parse_llm_response(llm_result["analysis"], signal)
-            if not parsed_signal:
-                logger.info(f"Could not parse LLM response for {signal['asset']}")
+            # Parse the JSON from LLM analysis
+            try:
+                # Extract JSON from code blocks if present
+                analysis = llm_result["analysis"]
+                if '```json' in analysis:
+                    json_start = analysis.find('```json') + 7
+                    json_end = analysis.find('```', json_start)
+                    if json_end == -1:
+                        json_end = len(analysis)
+                    json_str = analysis[json_start:json_end].strip()
+                else:
+                    json_str = analysis.strip()
+                
+                parsed_signal = json.loads(json_str)
+                
+                # Ensure required fields are present
+                required_fields = ['symbol', 'side', 'entry', 'stop_loss', 'take_profit', 'confidence']
+                if not all(field in parsed_signal for field in required_fields):
+                    raise ValueError("Missing required fields")
+                    
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.warning(f"Failed to parse LLM JSON response for {signal['asset']}: {e}")
                 time.sleep(30)
                 continue
-
-            # 👇 ADD LEVERAGE TO PARSED SIGNAL
-            parsed_signal['leverage'] = leverage
+            
             
             # Execute position using your existing executor
             execution_result = place_futures_order(parsed_signal)

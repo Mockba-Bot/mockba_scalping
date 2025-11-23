@@ -157,6 +157,7 @@ def calculate_position_size_with_margin_cap(signal: dict, available_balance: flo
     return qty
 
 def place_futures_order(signal: dict):
+    print(signal)
     symbol = signal['symbol']
     side = signal['side'].upper()
     
@@ -185,8 +186,9 @@ def place_futures_order(signal: dict):
     notional = qty * entry_price
 
     # Check if notional is reasonable for scalping
-    if notional < 15 or notional > available_balance * 0.2:  # Min $15, Max 20% of balance (was 30%)
-        logger.warning(f"Notional ${notional:.2f} outside safe range for {symbol}")
+    max_safe_notional = available_balance * leverage * 0.5  # Match the margin cap from position sizing
+    if notional < 15 or notional > max_safe_notional:
+        logger.warning(f"Notional ${notional:.2f} outside safe range for {symbol} (max: ${max_safe_notional:.2f})")
         return None
 
     set_leverage(symbol, leverage)
@@ -272,6 +274,9 @@ def place_futures_order(signal: dict):
             f"Entry: {signal['entry']:.4f}\n"
             f"TP: {signal['take_profit']:.4f} (MARKET)\n"
             f"SL: {signal['stop_loss']:.4f} (MARKET)\n"
+            f"Notional: ${notional:.2f}\n"
+            f"Leverage: {leverage}x\n"
+            f"Risk: {RISK_PER_TRADE_PCT}% of balance\n"
             f"⚠️ Auto-closing on TP/SL hit"
         )
         send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), confirmation_msg)
