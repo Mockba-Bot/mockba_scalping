@@ -222,7 +222,7 @@ def process_signal():
         # Only proceed if bot is running
         if not get_bot_status():
             logger.info("Bot is paused. Waiting to resume...")
-            time.sleep(10)
+            time.sleep(30)
             continue
 
         # Get signal from Mockba ML
