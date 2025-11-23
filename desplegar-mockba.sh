@@ -22,9 +22,8 @@ imprimir_error() {
     echo -e "${ROJO}❌ $1${NC}"
 }
 
-
 # Crear directorio del proyecto
-DIRECTORIO_PROYECTO="$HOME/mockba-trader"
+DIRECTORIO_PROYECTO="/opt/mockba-trader"
 imprimir_estado "Creando directorio del proyecto: $DIRECTORIO_PROYECTO"
 mkdir -p "$DIRECTORIO_PROYECTO"
 cd "$DIRECTORIO_PROYECTO"
@@ -33,8 +32,7 @@ cd "$DIRECTORIO_PROYECTO"
 if ! command -v docker &> /dev/null; then
     imprimir_advertencia "Docker no encontrado. Instalando..."
     curl -fsSL https://get.docker.com -o instalar-docker.sh
-    sudo sh instalar-docker.sh
-    sudo usermod -aG docker $USER
+    sh instalar-docker.sh
     imprimir_estado "Docker instalado correctamente"
 else
     imprimir_estado "Docker ya está instalado"
@@ -43,8 +41,8 @@ fi
 # Paso 2: Instalar Docker Compose si no existe
 if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
     imprimir_advertencia "Docker Compose no encontrado. Instalando..."
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
     imprimir_estado "Docker Compose instalado"
 else
     imprimir_estado "Docker Compose ya está instalado"
@@ -67,6 +65,22 @@ read -p "💬 Ingresa tu TELEGRAM_CHAT_ID: " TELEGRAM_CHAT_ID
 # Idioma del bot
 read -p "🌐 Idioma del bot (es/en) [es]: " BOT_LANGUAGE
 BOT_LANGUAGE=${BOT_LANGUAGE:-es}
+
+# Prompt personalizado
+echo ""
+echo "📝 Configuración del Prompt de IA"
+echo "=================================="
+echo "Ejemplo de prompt:"
+echo "Analiza este dataset de trading. Basado en estos datos, ¿debería tomar la señal sugerida? ¿Ves patrones técnicos que confirmen? ¿Niveles clave de soporte/resistencia? ¿El order book muestra liquidez suficiente?"
+echo ""
+read -p "Ingresa tu prompt personalizado (deja vacío para usar el predeterminado): " PROMPT_PERSONALIZADO
+
+if [ -z "$PROMPT_PERSONALIZADO" ]; then
+    PROMPT_PERSONALIZADO="Analiza este dataset de trading. Basado en estos datos, ¿debería tomar la señal sugerida? ¿Ves patrones técnicos que confirmen? ¿Niveles clave de soporte/resistencia? ¿El order book muestra liquidez suficiente?"
+    imprimir_estado "Usando prompt predeterminado"
+else
+    imprimir_estado "Usando prompt personalizado"
+fi
 
 # Paso 4: Crear archivos de configuración
 imprimir_estado "Creando archivos de configuración..."
@@ -134,17 +148,9 @@ MAX_LEVERAGE_SMALL=3
 MICRO_BACKTEST_MIN_EXPECTANCY=0.0025
 EOF
 
-# Crear plantilla de prompt LLM
-cat > plantilla_prompt_llm.txt << 'EOF'
-Eres un trader experimentado de criptomonedas analizando datos de mercado para Binance Futures.
-
-Por favor analiza estos datos y proporciona:
-1. Sentimiento a corto plazo (Alcista/Bajista/Neutral)
-2. Niveles clave de soporte y resistencia
-3. Acción recomendada con nivel de confianza
-4. Razonamiento breve
-
-Mantén el análisis conciso y enfocado en insights accionables.
+# Crear plantilla de prompt LLM con el prompt personalizado o predeterminado
+cat > plantilla_prompt_llm.txt << EOF
+$PROMPT_PERSONALIZADO
 EOF
 
 imprimir_estado "Archivos de configuración creados"
@@ -156,11 +162,13 @@ docker-compose up -d
 echo ""
 imprimir_estado "¡Bot iniciado correctamente!"
 echo ""
-echo "📊 Para ver logs: cd $DIRECTORIO_PROYECTO && docker-compose logs -f"
+echo "📊 Para ver logs: docker-compose logs -f"
 echo "🔧 Editar configuración: nano $DIRECTORIO_PROYECTO/.env"
-echo "🛑 Detener bot: cd $DIRECTORIO_PROYECTO && docker-compose down"
-echo "▶️  Iniciar bot: cd $DIRECTORIO_PROYECTO && docker-compose up -d"
+echo "📝 Editar prompt: nano $DIRECTORIO_PROYECTO/plantilla_prompt_llm.txt"
+echo "🛑 Detener bot: docker-compose down"
+echo "▶️  Iniciar bot: docker-compose up -d"
 echo ""
 echo "💡 Configuración guardada en: $DIRECTORIO_PROYECTO/.env"
+echo "💡 Prompt guardado en: $DIRECTORIO_PROYECTO/plantilla_prompt_llm.txt"
 echo ""
 imprimir_estado "¡Despliegue completado! 🎉"
