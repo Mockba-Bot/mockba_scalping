@@ -8,20 +8,22 @@ ROJO='\033[0;31m'
 VERDE='\033[0;32m'
 AMARILLO='\033[1;33m'
 AZUL='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 imprimir_estado() { echo -e "${VERDE}✅ $1${NC}"; }
 imprimir_advertencia() { echo -e "${AMARILLO}⚠️  $1${NC}"; }
-imprimir_error() { echo -e "${ROJO}❌ $1${NC}"; }
 imprimir_info() { echo -e "${AZUL}💡 $1${NC}"; }
+imprimir_error() { echo -e "${ROJO}❌ $1${NC}"; }
 
-# Helper: read required input (must be non-empty)
-read_required() {
-    local prompt="$1"
-    local var_name="$2"
+# === Helper Functions ===
+
+# For REQUIRED fields (cannot skip)
+pedir_obligatorio() {
+    local mensaje="$1"
+    local var="$2"
     while true; do
-        read -p "$prompt ('c' para cancelar): " input
-        case "$input" in
+        read -p "$mensaje ('c' para cancelar): " entrada
+        case "$entrada" in
             c|C)
                 imprimir_info "Instalación cancelada por el usuario."
                 exit 0
@@ -30,34 +32,38 @@ read_required() {
                 imprimir_advertencia "Este campo es obligatorio. Por favor, ingrésalo."
                 ;;
             *)
-                eval "$var_name='$input'"
+                eval "$var='$entrada'"
                 return
                 ;;
         esac
     done
 }
 
-# Helper: read optional input (Enter/x = default, c = cancel)
-read_optional() {
-    local prompt="$1"
-    local default="$2"
-    local var_name="$3"
-    read -p "$prompt (Enter o 'x' para usar '$default', 'c' para cancelar): " input
-    case "$input" in
-        c|C)
-            imprimir_info "Instalación cancelada por el usuario."
-            exit 0
-            ;;
-        ""|"x"|"X")
-            eval "$var_name='$default'"
-            ;;
-        *)
-            eval "$var_name='$input'"
-            ;;
-    esac
+# For OPTIONAL fields (can skip with Enter/x)
+pedir_opcional() {
+    local mensaje="$1"
+    local defecto="$2"
+    local var="$3"
+    while true; do
+        read -p "$mensaje (Enter o 'x' = usar '$defecto', 'c' = cancelar): " entrada
+        case "$entrada" in
+            c|C)
+                imprimir_info "Instalación cancelada por el usuario."
+                exit 0
+                ;;
+            ""|"x"|"X")
+                eval "$var='$defecto'"
+                return
+                ;;
+            *)
+                eval "$var='$entrada'"
+                return
+                ;;
+        esac
+    done
 }
 
-# === Main Script ===
+# === Main Flow ===
 
 DIRECTORIO_PROYECTO="/opt/mockba-trader"
 imprimir_estado "Creando directorio del proyecto: $DIRECTORIO_PROYECTO"
@@ -77,42 +83,46 @@ fi
 # === Docker Compose ===
 if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
     imprimir_advertencia "Docker Compose no encontrado. Instalando..."
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+         -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
     imprimir_estado "Docker Compose instalado"
 else
     imprimir_estado "Docker Compose ya está instalado"
 fi
 
-# === Configuración ===
-imprimir_info "Configuración del bot: API Keys (obligatorias)"
-read_required "🔑 BINANCE_API_KEY" BINANCE_API_KEY
-read_required "🔑 BINANCE_SECRET_KEY" BINANCE_SECRET_KEY
-read_required "🤖 DEEP_SEEK_API_KEY" DEEP_SEEK_API_KEY
+# === Configuración interactiva ===
+echo
+imprimir_info "🔧 Configuración del Bot - Paso 1: API Keys (obligatorias)"
+pedir_obligatorio "🔑 BINANCE_API_KEY" BINANCE_API_KEY
+pedir_obligatorio "🔑 BINANCE_SECRET_KEY" BINANCE_SECRET_KEY
+pedir_obligatorio "🤖 DEEP_SEEK_API_KEY" DEEP_SEEK_API_KEY
 
 echo
-imprimir_info "Configuración opcional: Notificaciones por Telegram"
-read_optional "🤖 Telegram API_TOKEN" "" API_TOKEN
-read_optional "💬 TELEGRAM_CHAT_ID" "" TELEGRAM_CHAT_ID
+imprimir_info "📱 Configuración del Bot - Paso 2: Telegram (opcional)"
+pedir_opcional "🤖 Telegram API_TOKEN" "" API_TOKEN
+pedir_opcional "💬 TELEGRAM_CHAT_ID" "" TELEGRAM_CHAT_ID
 
 echo
-imprimir_info "Configuración del bot"
-read_optional "🌐 Idioma (es/en)" "es" BOT_LANGUAGE
-read_optional "📊 Riesgo por trade (%)" "1.5" RISK_PER_TRADE_PCT
-read_optional "🎚️ Apalancamiento alto" "5" MAX_LEVERAGE_HIGH
-read_optional "🎚️ Apalancamiento medio" "4" MAX_LEVERAGE_MEDIUM
-read_optional "🎚️ Apalancamiento bajo" "3" MAX_LEVERAGE_SMALL
-read_optional "📈 Expectativa mínima backtest" "0.0025" MICRO_BACKTEST_MIN_EXPECTANCY
+imprimir_info "🌐 Configuración del Bot - Paso 3: Idioma"
+pedir_opcional "Idioma (es/en)" "es" BOT_LANGUAGE
 
 echo
-imprimir_info "Prompt de IA (deja en blanco para usar el predeterminado)"
+imprimir_info "⚙️ Configuración del Bot - Paso 4: Parámetros de Trading"
+pedir_opcional "📊 Riesgo por trade (%)" "1.5" RISK_PER_TRADE_PCT
+pedir_opcional "🎚️ Apalancamiento alto" "5" MAX_LEVERAGE_HIGH
+pedir_opcional "🎚️ Apalancamiento medio" "4" MAX_LEVERAGE_MEDIUM
+pedir_opcional "🎚️ Apalancamiento bajo" "3" MAX_LEVERAGE_SMALL
+pedir_opcional "📈 Expectativa mínima backtest" "0.0025" MICRO_BACKTEST_MIN_EXPECTANCY
+
+echo
+imprimir_info "📝 Configuración del Bot - Paso 5: Prompt de IA"
 DEFAULT_PROMPT="Analiza este dataset de trading. Basado en estos datos, ¿debería tomar la señal sugerida? ¿Ves patrones técnicos que confirmen? ¿Niveles clave de soporte/resistencia? ¿El order book muestra liquidez suficiente?"
-read_optional "✏️ Tu prompt personalizado" "$DEFAULT_PROMPT" PROMPT_PERSONALIZADO
+pedir_opcional "✏️ Prompt personalizado (deja en blanco para predeterminado)" "$DEFAULT_PROMPT" PROMPT_PERSONALIZADO
 
 # === Guardar archivos ===
 imprimir_estado "Creando archivos de configuración..."
 
-# docker-compose.yml
 cat > docker-compose.yml << EOF
 version: '3.8'
 services:
@@ -141,7 +151,6 @@ services:
       - WATCHTOWER_LABEL_ENABLE=true
 EOF
 
-# .env
 cat > .env << EOF
 BINANCE_API_KEY=$BINANCE_API_KEY
 BINANCE_SECRET_KEY=$BINANCE_SECRET_KEY
@@ -157,13 +166,20 @@ MAX_LEVERAGE_SMALL=$MAX_LEVERAGE_SMALL
 MICRO_BACKTEST_MIN_EXPECTANCY=$MICRO_BACKTEST_MIN_EXPECTANCY
 EOF
 
-# prompt.txt
 echo "$PROMPT_PERSONALIZADO" > prompt.txt
 
 imprimir_estado "Archivos creados: .env, docker-compose.yml, prompt.txt"
 
 # === Iniciar ===
-imprimir_estado "Iniciando el bot con Docker Compose..."
+imprimir_info "🚀 ¿Deseas iniciar el bot ahora?"
+read -p "Escribe 's' para iniciar, cualquier otra tecla para salir sin iniciar: " iniciar
+if [[ ! "$iniciar" =~ ^[Ss]$ ]]; then
+    imprimir_info "Instalación completada. Puedes iniciar manualmente con: docker-compose up -d"
+    exit 0
+fi
+
+imprimir_estado "Iniciando el bot..."
+
 if command -v docker-compose &> /dev/null; then
     DOCKER_CMD="docker-compose"
 else
@@ -184,6 +200,6 @@ if [ $? -eq 0 ]; then
     echo
     imprimir_estado "¡Despliegue completado! 🎉"
 else
-    imprimir_error "❌ Falló al iniciar el contenedor. Revisa la configuración."
+    imprimir_error "❌ Error al iniciar el contenedor. Verifica la configuración."
     exit 1
 fi

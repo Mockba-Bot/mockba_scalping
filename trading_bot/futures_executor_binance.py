@@ -237,31 +237,21 @@ def place_futures_order(signal: dict):
         entry_id = entry_order['orderId']
         logger.info(f"Entry market order filled: {entry_id} @ {entry_order['avgPrice']}")
 
-        # Take Profit (MARKET)
-        tp_order = client.futures_create_order(
+        # Take Profit and Stop Loss as OCO (One-Cancels-Other)
+        oco_order = client.futures_create_oco_order(
             symbol=symbol,
-            type='TAKE_PROFIT_MARKET',
             side=close_side,
-            stopPrice=tp_price,
             quantity=qty,
-            positionSide='BOTH',
-            reduceOnly=True
+            price=tp_price,  # Take profit price
+            stopPrice=sl_price,  # Stop loss trigger price
+            stopLimitPrice=sl_price,  # Stop loss limit price (same as trigger for market-like execution)
+            listClientOrderId=f"oco_{symbol}_{entry_id}"
         )
-        tp_id = tp_order['orderId']
-        logger.info(f"Take-profit market order placed: {tp_id} @ {tp_price}")
-
-        # Stop Loss (MARKET)
-        sl_order = client.futures_create_order(
-            symbol=symbol,
-            type='STOP_MARKET',
-            side=close_side,
-            stopPrice=sl_price,
-            quantity=qty,
-            positionSide='BOTH',
-            reduceOnly=True
-        )
-        sl_id = sl_order['orderId']
-        logger.info(f"Stop-loss market order placed: {sl_id} @ {sl_price}")
+        
+        tp_id = oco_order['orderReports'][0]['orderId']  # Take profit order
+        sl_id = oco_order['orderReports'][1]['orderId']  # Stop loss order
+        
+        logger.info(f"OCO orders placed: TP {tp_id} @ {tp_price}, SL {sl_id} @ {sl_price}")
 
         logger.info(f"✅ FULL POSITION OPENED: {symbol} | {side} | Qty: {qty} | Notional: ${notional:.2f}")
 
