@@ -229,7 +229,14 @@ nano /opt/mockba-trader/.env
 
 Ejecuta este comando **una sola vez** en tu VPS recién creado:
 
-curl -fsSL https://raw.githubusercontent.com/Mockba-Bot/mockba_trader_binance/main/desplegar-mockba.sh | bash
+# 1. Download
+curl -fsSL https://raw.githubusercontent.com/Mockba-Bot/mockba_trader_binance/main/desplegar-mockba.sh -o desplegar-mockba.sh
+
+# 2. Make it executable
+chmod +x desplegar-mockba.sh
+
+# 3. Run it (with sudo if writing to /opt/)
+sudo ./desplegar-mockba.sh
 
 
 ## Licencia
