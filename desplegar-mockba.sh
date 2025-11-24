@@ -66,6 +66,25 @@ read -p "💬 Ingresa tu TELEGRAM_CHAT_ID: " TELEGRAM_CHAT_ID
 read -p "🌐 Idioma del bot (es/en) [es]: " BOT_LANGUAGE
 BOT_LANGUAGE=${BOT_LANGUAGE:-es}
 
+# Parámetros de trading personalizables
+echo ""
+echo "⚙️ Parámetros de Trading"
+echo "========================"
+read -p "📊 Porcentaje de riesgo por trade (1.5): " RISK_PER_TRADE_PCT
+RISK_PER_TRADE_PCT=${RISK_PER_TRADE_PCT:-1.5}
+
+read -p "🎚️ Apalancamiento máximo alto (5): " MAX_LEVERAGE_HIGH
+MAX_LEVERAGE_HIGH=${MAX_LEVERAGE_HIGH:-5}
+
+read -p "🎚️ Apalancamiento máximo medio (4): " MAX_LEVERAGE_MEDIUM
+MAX_LEVERAGE_MEDIUM=${MAX_LEVERAGE_MEDIUM:-4}
+
+read -p "🎚️ Apalancamiento máximo bajo (3): " MAX_LEVERAGE_SMALL
+MAX_LEVERAGE_SMALL=${MAX_LEVERAGE_SMALL:-3}
+
+read -p "📈 Expectativa mínima backtest (0.0025): " MICRO_BACKTEST_MIN_EXPECTANCY
+MICRO_BACKTEST_MIN_EXPECTANCY=${MICRO_BACKTEST_MIN_EXPECTANCY:-0.0025}
+
 # Prompt personalizado
 echo ""
 echo "📝 Configuración del Prompt de IA"
@@ -85,8 +104,8 @@ fi
 # Paso 4: Crear archivos de configuración
 imprimir_estado "Creando archivos de configuración..."
 
-# Crear docker-compose.yml
-cat > docker-compose.yml << 'EOF'
+# Crear docker-compose-mockba-binance.yml
+cat > docker-compose-mockba-binance.yml << 'EOF'
 version: '3.8'
 services:
   micro-mockba-binance-futures-bot:
@@ -97,7 +116,7 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env
-      - ./plantilla_prompt_llm.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt
+      - ./llm_prompt_template.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt
 
   watchtower:
     image: containrrr/watchtower
@@ -141,15 +160,15 @@ CPU_COUNT=0
 MAX_WORKERS=10
 
 # PARÁMETROS DE TRADING
-RISK_PER_TRADE_PCT=1.5
-MAX_LEVERAGE_HIGH=5
-MAX_LEVERAGE_MEDIUM=4
-MAX_LEVERAGE_SMALL=3
-MICRO_BACKTEST_MIN_EXPECTANCY=0.0025
+RISK_PER_TRADE_PCT=$RISK_PER_TRADE_PCT
+MAX_LEVERAGE_HIGH=$MAX_LEVERAGE_HIGH
+MAX_LEVERAGE_MEDIUM=$MAX_LEVERAGE_MEDIUM
+MAX_LEVERAGE_SMALL=$MAX_LEVERAGE_SMALL
+MICRO_BACKTEST_MIN_EXPECTANCY=$MICRO_BACKTEST_MIN_EXPECTANCY
 EOF
 
-# Crear plantilla de prompt LLM con el prompt personalizado o predeterminado
-cat > plantilla_prompt_llm.txt << EOF
+# Crear archivo llm_prompt_template.txt con el prompt personalizado o predeterminado
+cat > llm_prompt_template.txt << EOF
 $PROMPT_PERSONALIZADO
 EOF
 
@@ -157,18 +176,19 @@ imprimir_estado "Archivos de configuración creados"
 
 # Paso 5: Iniciar el bot
 imprimir_estado "Iniciando Bot Mockba Trader..."
-docker-compose up -d
+docker-compose -f docker-compose-mockba-binance.yml up -d
 
 echo ""
 imprimir_estado "¡Bot iniciado correctamente!"
 echo ""
-echo "📊 Para ver logs: docker-compose logs -f"
+echo "📊 Para ver logs: docker-compose -f docker-compose-mockba-binance.yml logs -f"
 echo "🔧 Editar configuración: nano $DIRECTORIO_PROYECTO/.env"
-echo "📝 Editar prompt: nano $DIRECTORIO_PROYECTO/plantilla_prompt_llm.txt"
-echo "🛑 Detener bot: docker-compose down"
-echo "▶️  Iniciar bot: docker-compose up -d"
+echo "📝 Editar prompt: nano $DIRECTORIO_PROYECTO/llm_prompt_template.txt"
+echo "🛑 Detener bot: docker-compose -f docker-compose-mockba-binance.yml down"
+echo "▶️  Iniciar bot: docker-compose -f docker-compose-mockba-binance.yml up -d"
 echo ""
 echo "💡 Configuración guardada en: $DIRECTORIO_PROYECTO/.env"
-echo "💡 Prompt guardado en: $DIRECTORIO_PROYECTO/plantilla_prompt_llm.txt"
+echo "💡 Prompt guardado en: $DIRECTORIO_PROYECTO/llm_prompt_template.txt"
+echo "💡 Archivo compose: $DIRECTORIO_PROYECTO/docker-compose-mockba-binance.yml"
 echo ""
 imprimir_estado "¡Despliegue completado! 🎉"
