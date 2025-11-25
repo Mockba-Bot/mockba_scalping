@@ -3,7 +3,7 @@ import math
 import json
 from dotenv import load_dotenv
 from binance.client import Client
-from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET, STOP_MARKET, TAKE_PROFIT_MARKET
+from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
 from binance.exceptions import BinanceAPIException
 import redis
 import sys
@@ -240,7 +240,7 @@ def place_futures_order(signal: dict):
         # Take Profit (MARKET)
         tp_order = client.futures_create_order(
             symbol=symbol,
-            type=TAKE_PROFIT_MARKET,
+            type='TAKE_PROFIT_MARKET',
             side=close_side,
             stopPrice=tp_price,
             positionSide='BOTH',
@@ -254,7 +254,7 @@ def place_futures_order(signal: dict):
         # Stop Loss (MARKET)
         sl_order = client.futures_create_order(
             symbol=symbol,
-            type=STOP_MARKET,
+            type='STOP_MARKET',
             side=close_side,
             stopPrice=sl_price,
             positionSide='BOTH',
