@@ -243,7 +243,7 @@ def process_signal():
         if redis_client:
             current_id = signals[0].get('signal_id') if signals else None
             stored_id = redis_client.get("latest_signal_id")
-
+            
             if stored_id and current_id == stored_id.decode('utf-8'):
                 logger.info(f"Signal {current_id} already processed. Skipping.")
                 time.sleep(30)
