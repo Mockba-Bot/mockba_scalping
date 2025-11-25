@@ -100,25 +100,25 @@ pedir_obligatorio "🤖 DEEP_SEEK_API_KEY" DEEP_SEEK_API_KEY
 
 echo
 imprimir_info "📱 Configuración del Bot - Paso 2: Telegram (obligatorias)"
-pedir_opcional "🤖 Telegram API_TOKEN" "" API_TOKEN
-pedir_opcional "💬 TELEGRAM_CHAT_ID" "" TELEGRAM_CHAT_ID
+pedir_obligatorio "🤖 Telegram API_TOKEN" API_TOKEN
+pedir_obligatorio "💬 TELEGRAM_CHAT_ID" TELEGRAM_CHAT_ID
 
 echo
 imprimir_info "🌐 Configuración del Bot - Paso 3: Idioma"
-pedir_opcional "Idioma (es/en)" "es" BOT_LANGUAGE
+pedir_obligatorio "Idioma (es/en)" BOT_LANGUAGE
 
 echo
 imprimir_info "⚙️ Configuración del Bot - Paso 4: Parámetros de Trading"
-pedir_opcional "📊 Riesgo por trade (%)" "1.5" RISK_PER_TRADE_PCT
-pedir_opcional "🎚️ Apalancamiento alto" "5" MAX_LEVERAGE_HIGH
-pedir_opcional "🎚️ Apalancamiento medio" "4" MAX_LEVERAGE_MEDIUM
-pedir_opcional "🎚️ Apalancamiento bajo" "3" MAX_LEVERAGE_SMALL
-pedir_opcional "📈 Expectativa mínima backtest" "0.0025" MICRO_BACKTEST_MIN_EXPECTANCY
+pedir_obligatorio "📊 Riesgo por trade (%)" RISK_PER_TRADE_PCT
+pedir_obligatorio "🎚️ Apalancamiento alto" MAX_LEVERAGE_HIGH
+pedir_obligatorio "🎚️ Apalancamiento medio" MAX_LEVERAGE_MEDIUM
+pedir_obligatorio "🎚️ Apalancamiento bajo" MAX_LEVERAGE_SMALL
+pedir_obligatorio "📈 Expectativa mínima backtest" MICRO_BACKTEST_MIN_EXPECTANCY
+pedir_obligatorio "🔢 Máximo trades concurrentes" MAX_CONCURRENT_TRADES
 
 echo
 imprimir_info "📝 Configuración del Bot - Paso 5: Prompt de IA"
-DEFAULT_PROMPT="Analiza este dataset de trading. Basado en estos datos, ¿debería tomar la señal sugerida? ¿Ves patrones técnicos que confirmen? ¿Niveles clave de soporte/resistencia? ¿El order book muestra liquidez suficiente?"
-pedir_opcional "✏️ Prompt personalizado (deja en blanco para predeterminado)" "$DEFAULT_PROMPT" PROMPT_PERSONALIZADO
+pedir_obligatorio "✏️ Prompt personalizado" PROMPT_PERSONALIZADO
 
 # === Guardar archivos ===
 imprimir_estado "Creando archivos de configuración..."
@@ -155,7 +155,7 @@ services:
     container_name: redis-mockba-binance
     restart: always
     ports:
-      - "6391:6379"  # Expose Redis on external port 6391
+      - "6379:6379"  # Expose Redis on external port 6391
     volumes:
       - redis_data:/data  # Optional: Persist Redis data across restarts
 
@@ -174,6 +174,7 @@ APP_PORT=8000
 REDIS_URL=redis://redis:6379/0
 CPU_COUNT=0
 MAX_WORKERS=10
+MAX_CONCURRENT_TRADES=$MAX_CONCURRENT_TRADES
 RISK_PER_TRADE_PCT=$RISK_PER_TRADE_PCT
 MAX_LEVERAGE_HIGH=$MAX_LEVERAGE_HIGH
 MAX_LEVERAGE_MEDIUM=$MAX_LEVERAGE_MEDIUM

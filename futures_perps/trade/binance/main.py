@@ -10,7 +10,7 @@ from pydantic import BaseModel
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from db.db_ops import get_open_positions, update_position_pnl, initialize_database_tables, get_bot_status
+from db.db_ops import  initialize_database_tables, get_bot_status
 from logs.log_config import binance_trader_logger as logger
 from binance.client import Client as BinanceClient
 from trading_bot.send_bot_message import send_bot_message
@@ -120,6 +120,22 @@ def format_orderbook_as_text(ob: dict) -> str:
     
     return "\n".join(lines)
 
+def get_active_binance_positions_count() -> int:
+    """Get count of non-zero positions from Binance Futures"""
+    try:
+        client = BinanceClient(
+            api_key=os.getenv("BINANCE_API_KEY"),
+            api_secret=os.getenv("BINANCE_SECRET_KEY"),
+            testnet=False
+        )
+        positions = client.futures_position_information()
+        active_count = sum(1 for pos in positions if float(pos['positionAmt']) != 0)
+        logger.info(f"Active Binance positions: {active_count}")
+        return active_count
+    except Exception as e:
+        logger.error(f"Failed to fetch Binance positions: {e}")
+        # Fail-safe: assume 0 to avoid blocking (or return high number to block)
+        return 0
 
 def analyze_with_llm(signal_dict: dict) -> dict:
     """Send to LLM for detailed analysis using fixed prompt structure."""
@@ -254,9 +270,18 @@ def process_signal():
                 redis_client.setex("latest_signal_id", 3600, current_id)
         else:
             logger.warning("Redis not available, skipping deduplication")
+            
 
         # Process the single signal (API always returns one)
         if signals:
+
+            # ✅ Enforce max 5 concurrent positions
+            active_count = get_active_binance_positions_count()
+            if active_count >= int(os.getenv("MAX_CONCURRENT_TRADES", "5")):
+                logger.info(f"Max concurrent positions ({os.getenv('MAX_CONCURRENT_TRADES', '5')}) reached. Skipping new signal for {signals[0]['asset']}")
+                time.sleep(30)
+                continue
+
             signal = signals[0]
             # Get confidence level
             confidence_level = get_confidence_level(signal['confidence_percent'])
@@ -335,52 +360,11 @@ def process_signal():
         time.sleep(30)
 
 
-# Position monitoring thread (same as before)
-def position_monitor_loop():
-    """Continuously monitor all open positions."""
-    logger.info("🚀 Starting position monitor...")
-    
-    while True:
-        try:
-            open_positions = get_open_positions()
-            
-            if open_positions:
-                logger.info(f"Monitoring {len(open_positions)} open positions")
-                
-                for pos in open_positions:
-                    closed_info = update_position_pnl(pos['id'], pos)
-                    if closed_info:
-                        emoji = "🟢" if closed_info['pnl_usd'] >= 0 else "🔴"
-                        message = (
-                            f"{emoji} POSITION UPDATE on BINANCE\n"
-                            f"Symbol: {closed_info['symbol']}\n"
-                            f"Side: {closed_info['side'].upper()}\n"
-                            f"Fill Price: {closed_info['fill_price']:.4f}\n"
-                            f"Current Price: {closed_info['current_price']:.4f}\n"
-                            f"PnL: {closed_info['pnl_pct']:.4f}% | ${closed_info['pnl_usd']:.4f}"
-                        )
-                        send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), message)
-
-                    time.sleep(0.1)
-
-            time.sleep(60)
-
-        except KeyboardInterrupt:
-            logger.info("Position monitor stopped by user")
-            break
-        except Exception as e:
-            logger.error(f"Position monitor error: {e}")
-            time.sleep(5)
-
-
-
 if __name__ == "__main__":
-    # Check for tables
-    initialize_database_tables()
+    # # Check for tables
+    # initialize_database_tables()
 
-    # Start signal processing
-    process_signal()
-
-    # # start monitoring
-    monitor_thread = threading.Thread(target=position_monitor_loop, daemon=True)
-    monitor_thread.start()
+    # # Start signal processing
+    # process_signal()
+    active_count = get_active_binance_positions_count()
+    print(f"Active Binance positions: {active_count}")
