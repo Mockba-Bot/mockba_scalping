@@ -238,7 +238,14 @@ def downloadTrades(m):
     # Create CSV content
     csv_content = "id,chat_id,symbol,side,entry_price,exit_price,quantity,notional_usd,profit_loss_usd,profit_loss_pct,entry_order_id,exit_order_id,created_at,closed_at,exchange\n"
     for trade in trades:
-        csv_content += f"{trade['id']},{trade['chat_id']},{trade['symbol']},{trade['side']},{trade['entry_price']},{trade['exit_price']},{trade['quantity']},{trade['notional_usd']},{trade['profit_loss_usd']},{trade['profit_loss_pct']},{trade['entry_order_id']},{trade['exit_order_id']},{trade['created_at']},{trade['closed_at']},{trade['exchange']}\n"
+        # Handle missing fields gracefully
+        exit_price = trade.get('exit_price', '')  # Empty if not closed
+        exit_order_id = trade.get('exit_order_id', '')  # Empty if not closed
+        closed_at = trade.get('closed_at', '')  # Empty if still open
+        profit_loss_usd = trade.get('profit_loss_usd', trade.get('current_pnl_usd', 0))
+        profit_loss_pct = trade.get('profit_loss_pct', trade.get('current_pnl_pct', 0))
+        
+        csv_content += f"{trade['id']},{trade['chat_id']},{trade['symbol']},{trade['side']},{trade['entry_price']},{exit_price},{trade['quantity']},{trade.get('notional_usd', '')},{profit_loss_usd},{profit_loss_pct},{trade.get('entry_order_id', '')},{exit_order_id},{trade['created_at']},{closed_at},{trade.get('exchange', '')}\n"
     # Send CSV file
     bot.send_document(cid, ('trades.csv', csv_content))
     bot.send_message(cid, translate("Trades sent.", cid), parse_mode='Markdown')
