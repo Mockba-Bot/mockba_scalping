@@ -99,7 +99,7 @@ pedir_obligatorio "🔑 BINANCE_SECRET_KEY" BINANCE_SECRET_KEY
 pedir_obligatorio "🤖 DEEP_SEEK_API_KEY" DEEP_SEEK_API_KEY
 
 echo
-imprimir_info "📱 Configuración del Bot - Paso 2: Telegram (opcional)"
+imprimir_info "📱 Configuración del Bot - Paso 2: Telegram (obligatorias)"
 pedir_opcional "🤖 Telegram API_TOKEN" "" API_TOKEN
 pedir_opcional "💬 TELEGRAM_CHAT_ID" "" TELEGRAM_CHAT_ID
 
@@ -149,6 +149,18 @@ services:
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_LIFECYCLE_HOOKS=true
       - WATCHTOWER_LABEL_ENABLE=true
+
+  redis:
+    image: redis:latest
+    container_name: redis-mockba-binance
+    restart: always
+    ports:
+      - "6391:6379"  # Expose Redis on external port 6391
+    volumes:
+      - redis_data:/data  # Optional: Persist Redis data across restarts
+
+volumes:
+  redis_data:  # Define the volume for Redis data persistence        
 EOF
 
 cat > .env << EOF
@@ -159,6 +171,9 @@ API_TOKEN=$API_TOKEN
 TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
 BOT_LANGUAGE=$BOT_LANGUAGE
 APP_PORT=8000
+REDIS_URL=redis://redis:6379/0
+CPU_COUNT=0
+MAX_WORKERS=10
 RISK_PER_TRADE_PCT=$RISK_PER_TRADE_PCT
 MAX_LEVERAGE_HIGH=$MAX_LEVERAGE_HIGH
 MAX_LEVERAGE_MEDIUM=$MAX_LEVERAGE_MEDIUM

@@ -28,7 +28,7 @@ services:
 
   redis:
     image: redis:latest
-    container_name: redis-apolo-binance
+    container_name: redis-mockba-binance
     restart: always
     ports:
       - "6391:6379"  # Expose Redis on external port 6391

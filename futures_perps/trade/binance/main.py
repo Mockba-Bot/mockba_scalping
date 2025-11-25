@@ -28,9 +28,10 @@ if redis_url:
         redis_client.ping()
         logger.info("Connected to Redis successfully")
     except redis.ConnectionError as e:
-        logger.error(f"Redis connection error: {e}")
+        logger.warning(f"Redis not available (optional caching disabled): {e}")
         redis_client = None
 else:
+    logger.info("Redis not configured (optional caching disabled)")
     redis_client = None
 
 

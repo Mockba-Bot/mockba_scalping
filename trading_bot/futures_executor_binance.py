@@ -23,13 +23,18 @@ client = Client(
     testnet=False
 )
 
-# Redis
 # Initialize Redis connection
-try:
-    redis_client = redis.from_url(os.getenv("REDIS_URL"))
-    redis_client.ping()
-except redis.ConnectionError as e:
-    print(f"Redis connection error: {e}")
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    try:
+        redis_client = redis.from_url(redis_url)
+        redis_client.ping()
+        logger.info("Connected to Redis successfully")
+    except redis.ConnectionError as e:
+        logger.warning(f"Redis not available (optional caching disabled): {e}")
+        redis_client = None
+else:
+    logger.info("Redis not configured (optional caching disabled)")
     redis_client = None
 
 # Risk parameters - SAFER VALUES
