@@ -109,16 +109,16 @@ pedir_obligatorio "Idioma (es/en)" BOT_LANGUAGE
 
 echo
 imprimir_info "⚙️ Configuración del Bot - Paso 4: Parámetros de Trading"
-pedir_obligatorio "📊 Riesgo por trade (%)" RISK_PER_TRADE_PCT
-pedir_obligatorio "🎚️ Apalancamiento alto" MAX_LEVERAGE_HIGH
-pedir_obligatorio "🎚️ Apalancamiento medio" MAX_LEVERAGE_MEDIUM
-pedir_obligatorio "🎚️ Apalancamiento bajo" MAX_LEVERAGE_SMALL
-pedir_obligatorio "📈 Expectativa mínima backtest" MICRO_BACKTEST_MIN_EXPECTANCY
-pedir_obligatorio "🔢 Máximo trades concurrentes" MAX_CONCURRENT_TRADES
+pedir_obligatorio "📊 Riesgo por trade (%) (Ejemplo 1.5)" RISK_PER_TRADE_PCT
+pedir_obligatorio "🎚️ Apalancamiento alto (Ejemplo 10)" MAX_LEVERAGE_HIGH
+pedir_obligatorio "🎚️ Apalancamiento medio (Ejemplo 5)" MAX_LEVERAGE_MEDIUM
+pedir_obligatorio "🎚️ Apalancamiento bajo (Ejemplo 3)" MAX_LEVERAGE_SMALL
+pedir_obligatorio "📈 Expectativa mínima backtest (Ejemplo 0.0040)" MICRO_BACKTEST_MIN_EXPECTANCY
+pedir_obligatorio "🔢 Máximo trades concurrentes (Ejemplo 5)" MAX_CONCURRENT_TRADES
 
 echo
 imprimir_info "📝 Configuración del Bot - Paso 5: Prompt de IA"
-pedir_obligatorio "✏️ Prompt personalizado" PROMPT_PERSONALIZADO
+pedir_obligatorio "✏️ Prompt personalizado (Ejemplo: 'Eres un experto en trading...')" PROMPT_PERSONALIZADO
 
 # === Guardar archivos ===
 imprimir_estado "Creando archivos de configuración..."

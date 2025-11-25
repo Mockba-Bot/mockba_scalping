@@ -1,7 +1,6 @@
 import json
 import requests
 import os
-import threading
 import time
 import sys
 import re
@@ -13,7 +12,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 from db.db_ops import  initialize_database_tables, get_bot_status
 from logs.log_config import binance_trader_logger as logger
 from binance.client import Client as BinanceClient
-from trading_bot.send_bot_message import send_bot_message
 from historical_data import get_historical_data_limit_binance, get_orderbook
 
 # Load environment variables
@@ -36,7 +34,7 @@ else:
 
 
 # Import your executor
-from trading_bot.futures_executor_binance import place_futures_order, get_confidence_level as executor_get_confidence_level
+from trading_bot.futures_executor_binance import place_futures_order, cleanup_orphaned_orders
 
 # Import your liquidity persistence monitor
 import liquidity_persistence_monitor as lpm
@@ -156,7 +154,8 @@ def analyze_with_llm(signal_dict: dict) -> dict:
 
     # --- Rest of your prompt logic (unchanged) ---
     intro = (
-        "You are an experienced retail crypto trader with 10 years of experience.\n"
+        "You are an elite discretionary crypto futures trader with 10+ years of experience.  \n"
+        "Your job is to **validate or reject** the given signal using ONLY the data provided. .\n"
         "Analyze the attached CSV (80 candles) and orderbook for the given signal.\n\n"
         f"• Asset: {signal_dict['asset']}\n"
         f"• Signal: {signal_dict['signal']}\n"
@@ -207,6 +206,10 @@ def analyze_with_llm(signal_dict: dict) -> dict:
 def process_signal():
     while True:
         """Process incoming signal from Api bot with combined CSV + orderbook file"""
+
+        # Cleanup orphaned orders on each loop
+        cleanup_orphaned_orders()
+
         # Only proceed if bot is running
         if not get_bot_status():
             logger.info("Bot is paused. Waiting to resume...")
@@ -360,11 +363,10 @@ def process_signal():
         time.sleep(30)
 
 
+
 if __name__ == "__main__":
     # # Check for tables
-    # initialize_database_tables()
+    initialize_database_tables()
 
     # # Start signal processing
-    # process_signal()
-    active_count = get_active_binance_positions_count()
-    print(f"Active Binance positions: {active_count}")
+    process_signal()

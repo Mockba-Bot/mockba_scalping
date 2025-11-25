@@ -1,6 +1,7 @@
 import os
 import math
 import json
+from time import time
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
@@ -247,7 +248,7 @@ def place_futures_order(signal: dict):
             priceProtect=True
         )
         tp_id = tp_order['orderId']
-        logger.info(f"Take-profit market order placed: {tp_id} @ {tp_price}")
+        logger.info(f"TP placed: {tp_id}")
 
         # Stop Loss (MARKET)
         sl_order = client.futures_create_order(
@@ -261,9 +262,22 @@ def place_futures_order(signal: dict):
             priceProtect=True
         )
         sl_id = sl_order['orderId']
-        logger.info(f"Stop-loss market order placed: {sl_id} @ {sl_price}")
+        logger.info(f"SL placed: {sl_id}")
+
 
         logger.info(f"✅ FULL POSITION OPENED: {symbol} | {side} | Qty: {qty} | Notional: ${notional:.2f}")
+
+        # 🚨 CRITICAL: Verify position is still open (protects against instant SL/TP or API glitches)
+        time.sleep(1)  # Let Binance settle
+        try:
+            pos_info = client.futures_position_information(symbol=symbol)
+            current_amt = float(pos_info[0]['positionAmt'])
+            if current_amt == 0:
+                logger.warning(f"Position closed immediately after opening for {symbol}. Cleaning up TP/SL...")
+                cleanup_specific_orders(symbol, tp_id, sl_id)  # ← you'll define this
+                return None
+        except Exception as e:
+            logger.error(f"Failed to verify position: {e}")
 
         # Build the message for the bot
         confirmation_msg = (
@@ -279,6 +293,7 @@ def place_futures_order(signal: dict):
             f"Leverage: {leverage}x\n"
             f"Risk: {RISK_PER_TRADE_PCT}% of balance\n"
             f"⚠️ Auto-closing on TP/SL hit"
+            f"ℹ️ If position closes but orders remain, cancel them manually in Binance"
         )
         send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), confirmation_msg)
 
@@ -296,3 +311,33 @@ def place_futures_order(signal: dict):
     except Exception as e:
         logger.error(f"Unexpected error placing orders for {symbol}: {e}")
         return None
+
+def cleanup_specific_orders(symbol: str, tp_id: str, sl_id: str):
+    """Cancel specific TP/SL orders if they exist"""
+    for order_id in [tp_id, sl_id]:
+        try:
+            client.futures_cancel_order(symbol=symbol, orderId=order_id)
+            logger.info(f"Cancelled orphaned order {order_id} for {symbol}")
+        except Exception as e:
+            # Order may not exist — that's OK
+            pass    
+
+def cleanup_orphaned_orders():
+    """Cancel any TP/SL orders for symbols with zero position"""
+    try:
+        positions = client.futures_position_information()
+        for pos in positions:
+            symbol = pos['symbol']
+            amt = float(pos['positionAmt'])
+            if amt == 0:
+                # Get open orders for this symbol
+                open_orders = client.futures_get_open_orders(symbol=symbol)
+                for order in open_orders:
+                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                        try:
+                            client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+                            logger.info(f"Cleaned up orphaned {order['type']} order {order['orderId']} for {symbol}")
+                        except Exception as e:
+                            logger.error(f"Failed to cancel order {order['orderId']}: {e}")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")    

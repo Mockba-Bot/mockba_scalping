@@ -15,6 +15,7 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 @contextmanager
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # enables dict-like access
     try:
         yield conn
     finally:
