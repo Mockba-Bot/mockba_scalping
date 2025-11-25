@@ -241,15 +241,15 @@ def process_signal():
 
         # Compare with Redis to avoid duplicates
         if redis_client:
-            stored = redis_client.get("active_signals")
-            if stored:
-                stored_signals = json.loads(stored)
-                if stored_signals == signals:
-                    logger.info("Signals unchanged, skipping processing...")
-                    time.sleep(30)
-                    continue
-            # Store new signals (no expiration)
-            redis_client.set("active_signals", json.dumps(signals))
+            current_id = signals[0].get('signal_id') if signals else None
+            stored_id = redis_client.get("latest_signal_id")
+
+            if stored_id and current_id == stored_id.decode('utf-8'):
+                logger.info(f"Signal {current_id} already processed. Skipping.")
+                time.sleep(30)
+                continue
+            elif current_id:
+                redis_client.setex("latest_signal_id", 3600, current_id)
         else:
             logger.warning("Redis not available, skipping deduplication")
 
