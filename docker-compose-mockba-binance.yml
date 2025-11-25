@@ -2,6 +2,9 @@ services:
   micro-mockba-binance-futures-bot:
     image: andresdom2004/micro-mockba-binance-futures-bot:latest
     container_name: micro-mockba-binance-futures-bot
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: always
     env_file: 
       - .env  # Load environment variables for Micro Central

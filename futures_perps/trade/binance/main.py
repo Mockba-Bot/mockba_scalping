@@ -206,7 +206,7 @@ def process_signal():
 
         # If the ressponse if a empty list, skip
         if response.json() == []:
-            logger.info("No active signals received.")
+            # logger.info("No active signals received.")
             time.sleep(30)
             continue
         
