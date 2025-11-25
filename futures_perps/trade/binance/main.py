@@ -26,8 +26,9 @@ if redis_url:
     try:
         redis_client = redis.from_url(redis_url)
         redis_client.ping()
+        logger.info("Connected to Redis successfully")
     except redis.ConnectionError as e:
-        print(f"Redis connection error: {e}")
+        logger.error(f"Redis connection error: {e}")
         redis_client = None
 else:
     redis_client = None
