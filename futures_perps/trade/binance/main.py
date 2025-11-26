@@ -86,25 +86,6 @@ def load_prompt_template():
     except FileNotFoundError:
         raise FileNotFoundError("llm_prompt_template.txt not found. Please create the prompt file.")
 
-def get_current_balance():
-    """Get current account balance from Binance"""
-    from binance.client import Client as BinanceClient
-    import os
-    
-    client = BinanceClient(
-        api_key=os.getenv("BINANCE_API_KEY"),
-        api_secret=os.getenv("BINANCE_SECRET_KEY"),
-        testnet=False
-    )
-    
-    try:
-        account = client.futures_account()
-        for asset_info in account['assets']:
-            if asset_info['asset'] == 'USDT':
-                return float(asset_info['marginBalance'])
-    except Exception as e:
-        # Default to 20 if API call fails
-        return 20.0
 
 # Helper: Format orderbook as text (not CSV!)
 def format_orderbook_as_text(ob: dict) -> str:
