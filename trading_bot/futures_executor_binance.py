@@ -1,7 +1,7 @@
 import os
 import math
 import json
-from time import time
+import time
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
@@ -268,7 +268,7 @@ def place_futures_order(signal: dict):
         logger.info(f"✅ FULL POSITION OPENED: {symbol} | {side} | Qty: {qty} | Notional: ${notional:.2f}")
 
         # 🚨 CRITICAL: Verify position is still open (protects against instant SL/TP or API glitches)
-        time.sleep(1)  # Let Binance settle
+        time.sleep(2)  # Let Binance settle
         try:
             pos_info = client.futures_position_information(symbol=symbol)
             current_amt = float(pos_info[0]['positionAmt'])
