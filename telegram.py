@@ -97,11 +97,13 @@ def command_list(m):
         return
     cid = m.chat.id
     help_text = translate("Available options.", cid)
-    message_button1 = translate("📝  List Bot Status", cid)
+    message_button1 = translate("▶️ ⏹️  Start/Stop Bot", cid)
+    message_button2 = translate("📝  List Bot Status", cid)
     # Define the buttons
-    button1 = InlineKeyboardButton(message_button1, callback_data="ListBotStatus")
+    button1 = InlineKeyboardButton(message_button1, callback_data="SetBotStatus")
+    button2 = InlineKeyboardButton(message_button2, callback_data="ListBotStatus")
     # Create a nested list of buttons
-    buttons = [[button1]]
+    buttons = [[button1], [button2]]
     # Order the buttons in the second row
     buttons[1].sort(key=lambda btn: btn.text)
 
