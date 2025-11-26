@@ -65,7 +65,7 @@ pedir_opcional() {
 
 # === Main Flow ===
 
-DIRECTORIO_PROYECTO="/opt/mockba-trader"
+DIRECTORIO_PROYECTO="/opt/mockba-binance-trader"
 imprimir_estado "Creando directorio del proyecto: $DIRECTORIO_PROYECTO"
 mkdir -p "$DIRECTORIO_PROYECTO"
 cd "$DIRECTORIO_PROYECTO" || { imprimir_error "No se pudo acceder a $DIRECTORIO_PROYECTO"; exit 1; }
