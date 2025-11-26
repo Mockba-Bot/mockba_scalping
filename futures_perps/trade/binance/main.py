@@ -154,9 +154,9 @@ def analyze_with_llm(signal_dict: dict) -> dict:
 
     # --- Rest of your prompt logic (unchanged) ---
     intro = (
-        "You are an elite discretionary crypto futures trader with 10+ years of experience.  \n"
-        "Your job is to **validate or reject** the given signal using ONLY the data provided. .\n"
-        "Analyze the attached CSV (80 candles) and orderbook for the given signal.\n\n"
+        "Eres un trader discrecional de elite en futuros de cripto con más de 10 años de experiencia.  \n"
+        "Tu trabajo es **validar o rechazar** la señal dada usando SOLO los datos proporcionados. .\n"
+        "Analiza el CSV adjunto (80 velas) y el libro de órdenes para la señal dada.\n\n"
         f"• Asset: {signal_dict['asset']}\n"
         f"• Signal: {signal_dict['signal']}\n"
         f"• Confidence: {signal_dict['confidence']}%\n"
