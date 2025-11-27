@@ -188,6 +188,18 @@ def analyze_with_llm(signal_dict: dict) -> dict:
 
     analysis_logic = load_prompt_template()
 
+    # Ensure LLM knows how to set price levels — even if user prompt is vague
+    fallback_price_instructions = (
+        "\n\n### SI NO SE ESPECIFICA LO CONTRARIO, USA ESTAS REGLAS OBLIGATORIAS:\n"
+        "- entry: usa el precio actual de mercado (último close del CSV)\n"
+        "- stop_loss: colócalo MÁS ALLÁ del swing reciente (soporte/resistencia más cercano en contra de la señal)\n"
+        "- take_profit: aplica ratio 1:3 → take_profit = entry ± 3 × |entry − stop_loss|\n"
+        "- Asegúrate de que SL y TP estén en el lado correcto según la dirección (BUY/SELL)\n"
+    )
+
+    # Only add it if not already covered (optional), or just always add it for safety
+    analysis_logic += fallback_price_instructions
+
     response_format = (
         "\nRetorna SOLAMENTE un objeto JSON válido con las siguientes claves:\n"
         "- symbol: str (e.g., 'LTCUSDT')\n"
