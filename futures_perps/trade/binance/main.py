@@ -86,6 +86,23 @@ def load_prompt_template():
     except FileNotFoundError:
         raise FileNotFoundError("llm_prompt_template.txt not found. Please create the prompt file.")
 
+def get_current_balance():
+    """Get current account balance from Binance"""
+    
+    client = BinanceClient(
+        api_key=os.getenv("BINANCE_API_KEY"),
+        api_secret=os.getenv("BINANCE_SECRET_KEY"),
+        testnet=False
+    )
+    
+    try:
+        account = client.futures_account()
+        for asset_info in account['assets']:
+            if asset_info['asset'] == 'USDT':
+                return float(asset_info['marginBalance'])
+    except Exception as e:
+        # Default to 20 if API call fails
+        return 20.0
 
 # Helper: Format orderbook as text (not CSV!)
 def format_orderbook_as_text(ob: dict) -> str:
@@ -118,6 +135,23 @@ def get_active_binance_positions_count() -> int:
 
 def analyze_with_llm(signal_dict: dict) -> dict:
     """Send to LLM for detailed analysis using fixed prompt structure."""
+
+    # Normalize signal direction for LLM and executor
+    if signal_dict['signal'] == 1:
+        signal_side_str = "BUY"
+        signal_direction = "LONG"
+    elif signal_dict['signal'] == -1:
+        signal_side_str = "SELL"
+        signal_direction = "SHORT"
+    else:
+        # Fallback for string inputs like "LONG"
+        raw = str(signal_dict['signal']).upper()
+        if 'BUY' in raw or 'LONG' in raw:
+            signal_side_str = "BUY"
+            signal_direction = "LONG"
+        else:
+            signal_side_str = "SELL"
+            signal_direction = "SHORT"
     
     # ✅ Get DataFrame with ALL indicators (your function handles timeframe logic)
     df = get_historical_data_limit_binance(
@@ -139,7 +173,7 @@ def analyze_with_llm(signal_dict: dict) -> dict:
         "Tu trabajo es **validar o rechazar** la señal dada usando SOLO los datos proporcionados. .\n"
         "Analiza el CSV adjunto (80 velas) y el libro de órdenes para la señal dada.\n\n"
         f"• Asset: {signal_dict['asset']}\n"
-        f"• Signal: {signal_dict['signal']}\n"
+        f"• Signal: {signal_direction} ({signal_side_str})\n"
         f"• Confidence: {signal_dict['confidence']}%\n"
         f"• Timeframe: {signal_dict['interval']}\n"
         f"• Current Price: ${latest_close_price}\n"
@@ -155,10 +189,30 @@ def analyze_with_llm(signal_dict: dict) -> dict:
     analysis_logic = load_prompt_template()
 
     response_format = (
-        f"\nRETURN ONLY JSON with keys: symbol, side, entry, take_profit, stop_loss, confidence: {signal_dict['confidence_percent']}, leverage: {leverage}\n"
+        "\nRetorna SOLAMENTE un objeto JSON válido con las siguientes claves:\n"
+        "- symbol: str (e.g., 'LTCUSDT')\n"
+        "- side: str ('BUY' or 'SELL')\n"
+        "- entry: float (use current market price as base)\n"
+        "- take_profit: float\n"
+        "- stop_loss: float\n"
+        "- confidence: float (copy from input: " + str(signal_dict['confidence_percent']) + ")\n"
+        "- leverage: int (use: " + str(leverage) + ")\n"
+        "\nDo NOT include any other text, explanation, or markdown. Only pure JSON."
     )
 
-    prompt = intro + analysis_logic + response_format
+    # Inject real risk rules as a SYSTEM-like instruction
+    risk_context = (
+        f"\n--- PARÁMETROS DE RIESGO ACTUALES (OBLIGATORIOS) ---\n"
+        f"- Máximo apalancamiento permitido: {leverage}x\n"
+        f"- Riesgo por operación: {RISK_PER_TRADE_PCT}% del balance\n"
+        f"- Balance estimado: ~${get_current_balance():.2f} (para cálculos)\n"
+        f"- Ratio riesgo:beneficio obligatorio: 1:3\n"
+        f"- Stop loss debe estar más allá del último swing válido\n"
+        f"- Si el apalancamiento necesario supera {leverage}x, RECHAZA la señal\n"
+        f"- Si no puedes calcular niveles válidos, responde: NO EJECUTAR\n"
+    )
+
+    prompt = intro + analysis_logic + risk_context + response_format
 
     # --- Send to DeepSeek ---
     response = requests.post(
@@ -247,7 +301,7 @@ def process_signal():
             stored_id = redis_client.get("latest_signal_id")
             
             if stored_id and current_id == stored_id.decode('utf-8'):
-                # logger.info(f"Signal {current_id} already processed. Skipping.")
+                logger.info(f"Signal {current_id} already processed. Skipping.")
                 time.sleep(30)
                 continue
             elif current_id:
