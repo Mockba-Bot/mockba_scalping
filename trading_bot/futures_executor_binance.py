@@ -267,6 +267,9 @@ def place_futures_order(signal: dict):
 
         logger.info(f"✅ FULL POSITION OPENED: {symbol} | {side} | Qty: {qty} | Notional: ${notional:.2f}")
 
+        # ✅ STORE ORDER IDs in Redis
+        store_order_ids(symbol, tp_id, sl_id)
+
         # 🚨 CRITICAL: Verify position is still open (protects against instant SL/TP or API glitches)
         time.sleep(2)  # Let Binance settle
         try:
@@ -322,22 +325,102 @@ def cleanup_specific_orders(symbol: str, tp_id: str, sl_id: str):
             # Order may not exist — that's OK
             pass    
 
-def cleanup_orphaned_orders():
-    """Cancel any TP/SL orders for symbols with zero position"""
+def get_position_key(symbol: str) -> str:
+    return f"binance_position:{symbol}"
+
+def store_order_ids(symbol: str, tp_id: str, sl_id: str):
+    """Store TP/SL order IDs in Redis with 48h TTL (safety)"""
+    if redis_client:
+        redis_client.hset(
+            get_position_key(symbol),
+            mapping={"tp_id": tp_id, "sl_id": sl_id}
+        )
+        redis_client.expire(get_position_key(symbol), 172800)  # 48h
+
+def load_order_ids(symbol: str) -> dict:
+    """Load TP/SL order IDs from Redis"""
+    if redis_client:
+        data = redis_client.hgetall(get_position_key(symbol))
+        return {k.decode(): v.decode() for k, v in data.items()} if data else {}
+    return {}
+
+def clear_order_ids(symbol: str):
+    """Remove TP/SL tracking from Redis"""
+    if redis_client:
+        redis_client.delete(get_position_key(symbol))
+
+def cancel_orphaned_orders_for_symbol(symbol: str):
+    """Cancel TP/SL if position is closed but orders remain"""
+    try:
+        # Check current position
+        pos_info = client.futures_position_information(symbol=symbol)
+        position_amt = float(pos_info[0]['positionAmt'])
+        
+        # If position is closed (zero size)
+        if position_amt == 0:
+            order_ids = load_order_ids(symbol)
+            if not order_ids:
+                return
+
+            tp_id = order_ids.get("tp_id")
+            sl_id = order_ids.get("sl_id")
+
+            # Cancel any remaining TP/SL
+            for order_type, order_id in [("TP", tp_id), ("SL", sl_id)]:
+                if order_id:
+                    try:
+                        client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                        logger.info(f"✅ Cancelled orphaned {order_type} order {order_id} for {symbol}")
+                    except Exception as e:
+                        # Order may already be filled/cancelled — that's OK
+                        logger.debug(f"Orphaned {order_type} order not found: {e}")
+
+            # Clean up Redis
+            clear_order_ids(symbol)
+
+    except Exception as e:
+        logger.error(f"Error checking/canceling orphans for {symbol}: {e}")        
+
+
+def cleanup_all_orphaned_orders():
+    """Check all tracked symbols for orphaned orders"""
+    if not redis_client:
+        return
+
+    # Get all position keys
+    keys = redis_client.keys("binance_position:*")
+    for key in keys:
+        try:
+            symbol_bytes = key.split(b":")[-1]
+            symbol = symbol_bytes.decode()
+            cancel_orphaned_orders_for_symbol(symbol)
+        except Exception as e:
+            logger.error(f"Failed to process key {key}: {e}")
+
+
+def recover_order_state_on_startup():
+    """On startup, scan Binance for open positions + TP/SL orders, rebuild Redis"""
     try:
         positions = client.futures_position_information()
         for pos in positions:
             symbol = pos['symbol']
             amt = float(pos['positionAmt'])
-            if amt == 0:
-                # Get open orders for this symbol
+            if amt != 0:  # Active position
+                # Find associated TP/SL orders
                 open_orders = client.futures_get_open_orders(symbol=symbol)
+                tp_id = None
+                sl_id = None
                 for order in open_orders:
-                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                        try:
-                            client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
-                            logger.info(f"Cleaned up orphaned {order['type']} order {order['orderId']} for {symbol}")
-                        except Exception as e:
-                            logger.error(f"Failed to cancel order {order['orderId']}: {e}")
+                    if order['type'] == 'TAKE_PROFIT_MARKET':
+                        tp_id = order['orderId']
+                    elif order['type'] == 'STOP_MARKET':
+                        sl_id = order['orderId']
+                
+                # Only store if at least one TP/SL exists
+                if tp_id or sl_id:
+                    store_order_ids(symbol, tp_id or "", sl_id or "")
+                    logger.info(f"🔁 Recovered state for {symbol}: TP={tp_id}, SL={sl_id}")
+                else:
+                    logger.warning(f"Active position for {symbol} but no TP/SL found")
     except Exception as e:
-        logger.error(f"Cleanup error: {e}")    
+        logger.error(f"State recovery failed: {e}")

@@ -34,7 +34,7 @@ else:
 
 
 # Import your executor
-from trading_bot.futures_executor_binance import place_futures_order, cleanup_orphaned_orders
+from trading_bot.futures_executor_binance import place_futures_order, cleanup_all_orphaned_orders, recover_order_state_on_startup
 
 # Import your liquidity persistence monitor
 import liquidity_persistence_monitor as lpm
@@ -255,7 +255,7 @@ def process_signal():
         """Process incoming signal from Api bot with combined CSV + orderbook file"""
 
         # Cleanup orphaned orders on each loop
-        cleanup_orphaned_orders()
+        cleanup_all_orphaned_orders()
 
         # Only proceed if bot is running
         if not get_bot_status():
@@ -414,6 +414,9 @@ def process_signal():
 if __name__ == "__main__":
     # # Check for tables
     initialize_database_tables()
+
+    # Recover the order state on startup
+    recover_order_state_on_startup()
 
     # # Start signal processing
     process_signal()
