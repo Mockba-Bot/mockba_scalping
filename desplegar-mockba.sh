@@ -124,24 +124,28 @@ pedir_obligatorio "✏️ Prompt personalizado (Ejemplo: 'Eres un experto en tra
 imprimir_estado "Creando archivos de configuración..."
 
 cat > docker-compose.yml << EOF
-version: '3.8'
 services:
   micro-mockba-binance-futures-bot:
     image: andresdom2004/micro-mockba-binance-futures-bot:latest
     container_name: micro-mockba-binance-futures-bot
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: always
     env_file:
       - .env
     volumes:
       - ./.env:/app/.env
-      - ./prompt.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt
+      - ./llm_prompt_template.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt
+    depends_on:
+      - redis-binance
+    networks:
+      - mockba-binance-net
 
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower-binance
     restart: always
-    depends_on:
-      - micro-mockba-binance-futures-bot
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -149,18 +153,26 @@ services:
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_LIFECYCLE_HOOKS=true
       - WATCHTOWER_LABEL_ENABLE=true
+    networks:
+      - mockba-binance-net
 
-  redis:
+  redis-binance:
     image: redis:latest
     container_name: redis-mockba-binance
     restart: always
     ports:
-      - "6379:6379"  # Expose Redis on external port 6391
+      - "6392:6379"
     volumes:
-      - redis_data:/data  # Optional: Persist Redis data across restarts
+      - redis_binance_data:/data
+    networks:
+      - mockba-binance-net
 
 volumes:
-  redis_data:  # Define the volume for Redis data persistence        
+  redis_binance_data:
+
+networks:
+  mockba-binance-net:
+    driver: bridge       
 EOF
 
 cat > .env << EOF
