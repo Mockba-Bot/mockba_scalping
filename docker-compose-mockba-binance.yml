@@ -11,6 +11,10 @@ services:
     volumes:
       - ./.env:/app/.env  # Mount .env for editing
       - ./llm_prompt_template.txt:/app/futures_perps/trade/binance/llm_prompt_template.txt  # Mount prompt template for user editing
+    depends_on:
+      - redis-binance
+    networks:
+      - mockba-binance-net  
 
   watchtower:
     image: containrrr/watchtower
@@ -26,14 +30,16 @@ services:
       - WATCHTOWER_LIFECYCLE_HOOKS=true  # Ensure containers restart properly after an update
       - WATCHTOWER_LABEL_ENABLE=true  # Only update containers with the `com.centurylinklabs.watchtower.enable=true` label
 
-  redis:
+  redis-binance:
     image: redis:latest
     container_name: redis-mockba-binance
     restart: always
     ports:
       - "6391:6379"  # Expose Redis on external port 6391
     volumes:
-      - redis_data:/data  # Optional: Persist Redis data across restarts
+      - redis_binance_data:/data
+    networks:
+      - mockba-binance-net  
 
 volumes:
-  redis_data:  # Define the volume for Redis data persistence        
+  redis_binance_data:  # Define the volume for Redis data persistence        
