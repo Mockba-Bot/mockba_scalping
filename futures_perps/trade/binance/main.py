@@ -228,6 +228,9 @@ def analyze_with_llm(signal_dict: dict) -> dict:
 
     prompt = intro + analysis_logic + risk_context + response_format
 
+    # Debug the prmopt
+    logger.debug(f"LLM Prompt:\n{prompt[:2000]}...\n--- End of Prompt ---")
+
     # --- Send to DeepSeek ---
     response = requests.post(
         "https://api.deepseek.com/v1/chat/completions",
