@@ -36,6 +36,8 @@ else:
 # Import your executor
 from trading_bot.futures_executor_binance import place_futures_order, cleanup_all_orphaned_orders, recover_order_state_on_startup
 
+from trading_bot.send_bot_message import send_bot_message
+
 # Import your liquidity persistence monitor
 import liquidity_persistence_monitor as lpm
 
@@ -368,10 +370,13 @@ def process_signal():
                 logger.info(f"✅ {signal['asset']} passed CEX consensus: {cex_check['reason']}")
             
             # Analyze with LLM
+            logger.info(f"Analyzing signal for {signal['asset']} with LLM...")
             llm_result = analyze_with_llm(signal)
             print(llm_result["approved"])
             if not bool(llm_result["approved"]):
                 logger.info(f"LLM rejected signal for {signal['asset']}: {llm_result['analysis'][:200]}...")
+                message = f"LLM rejected signal for {signal['asset']}:\n{llm_result['analysis']}"
+                send_bot_message(int(os.getenv("TELEGRAM_CHAT_ID")), message)
                 time.sleep(30)
                 continue
             
