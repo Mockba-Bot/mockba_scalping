@@ -318,7 +318,7 @@ def process_signal():
             stored_id = redis_client.get("latest_signal_id")
             
             if stored_id and current_id == stored_id.decode('utf-8'):
-                logger.info(f"Signal {current_id} already processed. Skipping.")
+                # logger.info(f"Signal {current_id} already processed. Skipping.")
                 time.sleep(30)
                 continue
             elif current_id:
