@@ -357,7 +357,7 @@ def cancel_orphaned_orders_for_symbol(symbol: str):
         
         # FIX: Check if we got any position data for this symbol
         if not pos_info:
-            logger.debug(f"No position information found for {symbol}")
+            # logger.debug(f"No position information found for {symbol}")
             return
             
         position_amt = float(pos_info[0]['positionAmt'])
