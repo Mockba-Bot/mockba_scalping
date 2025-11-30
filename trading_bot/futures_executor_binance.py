@@ -354,6 +354,12 @@ def cancel_orphaned_orders_for_symbol(symbol: str):
     try:
         # Check current position
         pos_info = client.futures_position_information(symbol=symbol)
+        
+        # FIX: Check if we got any position data for this symbol
+        if not pos_info:
+            logger.debug(f"No position information found for {symbol}")
+            return
+            
         position_amt = float(pos_info[0]['positionAmt'])
         
         # If position is closed (zero size)
@@ -379,7 +385,8 @@ def cancel_orphaned_orders_for_symbol(symbol: str):
             clear_order_ids(symbol)
 
     except Exception as e:
-        logger.error(f"Error checking/canceling orphans for {symbol}: {e}")        
+        logger.error(f"Error checking/canceling orphans for {symbol}: {e}")
+
 
 
 def cleanup_all_orphaned_orders():
