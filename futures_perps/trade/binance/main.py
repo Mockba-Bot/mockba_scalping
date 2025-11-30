@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 from db.db_ops import  initialize_database_tables, get_bot_status
 from logs.log_config import binance_trader_logger as logger
 from binance.client import Client as BinanceClient
-from historical_data import get_historical_data_limit_binance, get_orderbook
+from historical_data import get_historical_data_limit_binance, get_orderbook, get_funding_rate_history, get_public_liquidations, get_funding_rate_history, get_liquidation_levels
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -169,6 +169,87 @@ def analyze_with_llm(signal_dict: dict) -> dict:
     orderbook = get_orderbook(signal_dict['asset'], limit=20)
     orderbook_content = format_orderbook_as_text(orderbook)  # ← See helper below
 
+    # Get Binance funding rate history
+    funding_history = get_funding_rate_history(symbol=signal_dict['asset'], limit=50)
+    
+    # Calculate meaningful funding metrics from Binance data
+    if funding_history and isinstance(funding_history, list):
+        # Convert funding rates to float and handle Binance format
+        funding_rates = []
+        for item in funding_history:
+            try:
+                rate = float(item.get('fundingRate', 0))
+                funding_rates.append(rate)
+            except (ValueError, TypeError):
+                funding_rates.append(0)
+        
+        current_funding = funding_rates[0] if funding_rates else 0
+        avg_funding = sum(funding_rates) / len(funding_rates) if funding_rates else 0
+        
+        funding_trend = "POSITIVE" if current_funding > avg_funding else "NEGATIVE"
+        funding_extreme = abs(current_funding) > 0.0005  # 0.05%
+        
+        # Count positive vs negative funding periods
+        positive_funding = sum(1 for rate in funding_rates if rate > 0)
+        negative_funding = sum(1 for rate in funding_rates if rate < 0)
+        funding_bias = "ALCISTA" if positive_funding > negative_funding else "BAJISTA"
+        
+    else:
+        current_funding = 0
+        funding_trend = "UNKNOWN"
+        funding_extreme = False
+        funding_bias = "NEUTRO"
+
+    # Get liquidations data (Binance format)
+    liquidations = get_public_liquidations(symbol=signal_dict['asset'], lookback_hours=24)
+    liquidation_levels = get_liquidation_levels(symbol=signal_dict['asset'])
+    
+    # Analyze liquidation context
+    if liquidations and isinstance(liquidations, list):
+        total_liquidations = len(liquidations)
+        # Binance liquidations might have different structure
+        liquidation_analysis = f"Liquidaciones activas: {total_liquidations}"
+    else:
+        total_liquidations = 0
+        liquidation_analysis = "Sin liquidaciones recientes detectadas"
+    
+    # Use liquidation levels data if available
+    if liquidation_levels:
+        open_interest = liquidation_levels.get('open_interest', 0)
+        mark_price = liquidation_levels.get('mark_price', latest_close_price)
+        oi_context = f"Interés abierto: {open_interest:,.0f} BTC"
+    else:
+        oi_context = "Interés abierto: No disponible"
+
+    # Enhanced funding context with actual Binance data
+    funding_context = (
+        "ANÁLISIS DE TASA DE FINANCIAMIENTO BINANCE (datos reales):\n"
+        f"• Tasa actual: {current_funding:.6f} ({current_funding*10000:.2f} bps)\n"
+        f"• Promedio 50 periodos: {avg_funding:.6f}\n"
+        f"• Tendencia: {funding_trend}\n"
+        f"• Sesgo: {funding_bias} ({positive_funding if funding_rates else 0} pos / {negative_funding if funding_rates else 0} neg)\n"
+        f"• Es extremo: {'SÍ' if funding_extreme else 'NO'}\n"
+        "Interpretación Binance:\n"
+        "- Funding >0: Largos pagan a cortos → presión bajista potencial\n"
+        "- Funding <0: Cortos pagan a largos → presión alcista potencial\n"
+        "- |Funding|>0.05%: Señal contraria fuerte\n"
+        "- Tendencia persistente: Indica sentimiento direccional\n"
+    )
+
+    # Enhanced liquidation context for Binance
+    liquidation_context = (
+        "ANÁLISIS DE LIQUIDACIONES BINANCE:\n"
+        f"• {liquidation_analysis}\n"
+        f"• {oi_context}\n"
+        f"• Precio mark: ${mark_price if liquidation_levels else latest_close_price:.2f}\n"
+        "Patrones de liquidación Binance:\n"
+        "- Alto interés abierto + funding positivo = riesgo bajista\n"
+        "- Alto interés abierto + funding negativo = riesgo alcista\n"
+        "- Liquidaciones recientes indican niveles de stop-loss activos\n"
+        "- El smart money opera en contra de clusters de liquidación\n"
+    )
+
+
     # --- Rest of your prompt logic (unchanged) ---
     intro = (
         "Eres un trader discrecional de elite en futuros de cripto con más de 10 años de experiencia.  \n"
@@ -214,19 +295,30 @@ def analyze_with_llm(signal_dict: dict) -> dict:
         "\nDo NOT include any other text, explanation, or markdown. Only pure JSON."
     )
 
-    # Inject real risk rules as a SYSTEM-like instruction
+    # Enhanced risk context with Binance-specific data
     risk_context = (
-        f"\n--- PARÁMETROS DE RIESGO ACTUALES (OBLIGATORIOS) ---\n"
-        f"- Máximo apalancamiento permitido: {leverage}x\n"
-        f"- Riesgo por operación: {RISK_PER_TRADE_PCT}% del balance\n"
-        f"- Balance estimado: ~${get_current_balance():.2f} (para cálculos)\n"
-        f"- Ratio riesgo:beneficio obligatorio: 1:3\n"
-        f"- Stop loss debe estar más allá del último swing válido\n"
-        f"- Si el apalancamiento necesario supera {leverage}x, RECHAZA la señal\n"
-        f"- Si no puedes calcular niveles válidos, responde: NO EJECUTAR\n"
+        f"\n--- PARÁMETROS DE RIESGO BINANCE (OBLIGATORIOS) ---\n"
+        f"• Apalancamiento máximo: {leverage}x\n"
+        f"• Riesgo/operación: {RISK_PER_TRADE_PCT}% del balance\n"
+        f"• Balance disponible: ~${get_current_balance():.2f}\n"
+        f"• Ratio R:B obligatorio: 1:3\n"
+        f"• Funding actual: {current_funding:.6f} → {'SEÑAL CONTRARIA FUERTE' if funding_extreme else 'NEUTRO'}\n"
+        f"• Interés abierto: {open_interest if liquidation_levels else 'N/A':,.0f}\n"
+        f"• Liquidaciones recientes: {total_liquidations} → {'ALERTA VOLATILIDAD' if total_liquidations > 10 else 'NORMAL'}\n"
+        f"- Si funding es extremo, considera operación contraria\n"
+        f"- Si alto interés abierto, mayor potencial de movimientos\n"
+        f"- Stop loss DEBE evitar niveles de liquidación masiva\n"
     )
 
-    prompt = intro + analysis_logic + risk_context + response_format
+    additional_market_context = (
+        "\n\nCONTEXTO ADICIONAL DEL MERCADO A CONSIDERAR:\n"
+        "- Analiza los extremos de funding rate para oportunidades de trading contrario\n"
+        "- Identifica clusters de liquidación que pueden causar movimientos violentos\n"
+        "- Combina la profundidad del orderbook con niveles de liquidación para S/R clave\n"
+        "- Usa las tendencias de funding para medir la saturación de sentimiento del mercado\n"
+    )
+
+    prompt = intro + analysis_logic + risk_context + additional_market_context + response_format
 
     # Debug the prmopt
     logger.debug(f"LLM Prompt:\n{prompt[:2000]}...\n--- End of Prompt ---")
@@ -240,7 +332,9 @@ def analyze_with_llm(signal_dict: dict) -> dict:
             "messages": [
                 {"role": "user", "content": prompt},
                 {"role": "user", "content": f"Candles (CSV format):\n{csv_content}"},
-                {"role": "user", "content": f"Orderbook:\n{orderbook_content}"}
+                {"role": "user", "content": f"Orderbook:\n{orderbook_content}"},
+                {"role": "user", "content": f"Funding Rate History:\n{funding_context}"},
+                {"role": "user", "content": f"Liquidations Data:\n{liquidation_context}"}
             ],
             "temperature": 0.0,
             "max_tokens": 500

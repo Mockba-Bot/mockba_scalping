@@ -1,5 +1,7 @@
 import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+from time import time
 from typing import Dict, Optional
 import requests
 import pandas as pd
@@ -268,6 +270,53 @@ def get_features_for_strategy(interval, strategy):
         "force_features": strategy_info.get("force_features", False)
     }
 
+def get_funding_rate_history(symbol: str, limit: int = 1000):
+    """
+    Get funding rate history from Binance Futures
+    """
+    url = "https://fapi.binance.com/fapi/v1/fundingRate"
+    params = {
+        "symbol": symbol,
+        "limit": limit
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Binance returns list of funding rate records
+        # Format: [{'symbol': 'BTCUSDT', 'fundingRate': '0.00010000', 'fundingTime': 1631232000000}, ...]
+        return data if isinstance(data, list) else []
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching Binance funding rate for {symbol}: {e}")
+        return []
+
+def get_funding_rate_current(symbol: str):
+    """
+    Get current funding rate from Binance Futures
+    """
+    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    params = {"symbol": symbol}
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Binance returns current funding rate in this endpoint
+        # Format: {'symbol': 'BTCUSDT', 'markPrice': '50000.00', 'indexPrice': '50000.00', 
+        #          'estimatedSettlePrice': '50000.00', 'lastFundingRate': '0.00010000', ...}
+        return {
+            'current_rate': float(data.get('lastFundingRate', 0)),
+            'next_funding_time': data.get('nextFundingTime'),
+            'mark_price': float(data.get('markPrice', 0))
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching current Binance funding rate for {symbol}: {e}")
+        return {'current_rate': 0, 'next_funding_time': None, 'mark_price': 0}
 
 def get_historical_data_limit_binance(pair: str, timeframe: str, limit: int = 200) -> Optional[pd.DataFrame]:
     """
@@ -345,9 +394,98 @@ def get_orderbook(symbol: str, limit: int = 5) -> Optional[Dict]:
         pass
     return None
 
+
+def get_public_liquidations(symbol: str = None, lookback_hours: int = 24):
+    """
+    Get liquidation data from Binance Futures
+    Note: Binance doesn't have direct liquidation history API, 
+    so we use the open interest and force orders as alternative
+    """
+    # Method 1: Get forced orders (partial liquidation data)
+    url = "https://fapi.binance.com/fapi/v1/forceOrders"
+    
+    end_time = int(time() * 1000)
+    start_time = end_time - (lookback_hours * 3600 * 1000)
+    
+    params = {
+        "startTime": start_time,
+        "endTime": end_time,
+    }
+    if symbol:
+        params["symbol"] = symbol
+        
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Binance force orders include liquidations
+        # Format: [{"orderId": 123, "symbol": "BTCUSDT", "status": "FILLED", 
+        #           "clientOrderId": "abc", "price": "50000", "avgPrice": "50000",
+        #           "origQty": "1", "executedQty": "1", "cumQuote": "50000",
+        #           "timeInForce": "GTC", "type": "LIMIT", "reduceOnly": False,
+        #           "closePosition": False, "side": "SELL", "positionSide": "LONG",
+        #           "stopPrice": "0", "workingType": "CONTRACT_PRICE", 
+        #           "priceProtect": False, "origType": "LIMIT", "time": 1631232000000,
+        #           "updateTime": 1631232000000}]
+        
+        liquidations = []
+        for order in data:
+            # Filter for liquidation-like patterns (you may need to adjust this logic)
+            if order.get('reduceOnly') or order.get('closePosition'):
+                liquidations.append({
+                    'symbol': order.get('symbol'),
+                    'side': order.get('side'),
+                    'quantity': float(order.get('executedQty', 0)),
+                    'price': float(order.get('avgPrice', 0)),
+                    'timestamp': order.get('time'),
+                    'type': 'liquidation'
+                })
+        
+        return liquidations
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching Binance liquidations: {e}")
+        return []
+
+def get_binance_liquidation_levels(symbol: str):
+    """
+    Alternative: Get liquidation levels using open interest and mark price
+    This estimates where liquidations might occur based on current OI
+    """
+    url = "https://fapi.binance.com/fapi/v1/openInterest"
+    params = {"symbol": symbol}
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        oi_data = response.json()
+        
+        # Get current mark price
+        premium_url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+        premium_response = requests.get(premium_url, params={"symbol": symbol})
+        premium_data = premium_response.json()
+        
+        return {
+            'symbol': symbol,
+            'open_interest': float(oi_data.get('openInterest', 0)),
+            'mark_price': float(premium_data.get('markPrice', 0)),
+            'timestamp': int(time() * 1000)
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching Binance liquidation levels for {symbol}: {e}")
+        return {}
+    
 # if __name__ == "__main__":
-#   data = get_historical_data_limit_binance("AVAXUSDT", "30m", limit=80)
-#   current_price = float(data["close"].iloc[-1])
-#   print(data)
-    # orderbook = get_orderbook("BTCUSDT", limit=5)
-    # print(orderbook)
+# #   data = get_historical_data_limit_binance("AVAXUSDT", "30m", limit=80)
+# #   current_price = float(data["close"].iloc[-1])
+# #   print(data)
+#     # orderbook = get_orderbook("BTCUSDT", limit=5)
+#     # print(orderbook)
+#     data = get_public_liquidations("BTCUSDT", lookback_hours=24)
+#     print(data)
+#     data1 = get_binance_liquidation_levels("BTCUSDT")
+#     print(data1)
+#     funding_history = get_funding_rate_history("BTCUSDT", limit=50)
+#     print(funding_history)
