@@ -140,6 +140,14 @@ def listMenu(m):
         return
     cid = m.chat.id
     help_text = translate("Available options.", cid)
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    # comparech chat_id with cid to ensure only authorized user can access
+    if str(chat_id) != str(cid):
+       text = translate("🔍 Not authorized", cid)
+       bot.send_message(cid, text, parse_mode='Markdown')
+       return
+    
     # Define the buttons
     button1 = InlineKeyboardButton(translate("📋  List Bot Status", cid), callback_data="ListBotStatus")
     button2 = InlineKeyboardButton(translate("<< Back to list", cid), callback_data="List")
@@ -161,6 +169,13 @@ def listBotStatus(m):
     itemd = types.KeyboardButton('/list')
     markup.row(itemd)
     global gpair
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    # comparech chat_id with cid to ensure only authorized user can access
+    if str(chat_id) != str(cid):
+       text = translate("🔍 Not authorized", cid)
+       bot.send_message(cid, text, parse_mode='Markdown')
+       return
 
     bot.send_message(cid, translate("Listing ...", cid), parse_mode='Markdown')
 
@@ -185,6 +200,13 @@ def SetBotStatus(m):
     markup.row(itemb)
     markup.row(itemd)
 
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    # comparech chat_id with cid to ensure only authorized user can access
+    if str(chat_id) != str(cid):
+       text = translate("🔍 Not authorized", cid)
+       bot.send_message(cid, text, parse_mode='Markdown')
+       return
+
     if gframe == 'CANCEL':
        markup = types.ReplyKeyboardMarkup()
        item = types.KeyboardButton('/list')
@@ -205,6 +227,14 @@ def startStopBot(m):
     markup = types.ReplyKeyboardMarkup()
     itemd = types.KeyboardButton('/list')
     markup.row(itemd)
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    # comparech chat_id with cid to ensure only authorized user can access
+    if str(chat_id) != str(cid):
+       text = translate("🔍 Not authorized", cid)
+       bot.send_message(cid, text, parse_mode='Markdown')
+       return
+    
     if valor != 'Start' and valor != 'Stop':
         markup = types.ReplyKeyboardMarkup()
         item = types.KeyboardButton('/list')
