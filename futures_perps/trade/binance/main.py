@@ -34,7 +34,7 @@ else:
 
 
 # Import your executor
-from trading_bot.futures_executor_binance import place_futures_order, cleanup_all_orphaned_orders, recover_order_state_on_startup
+from trading_bot.futures_executor_binance import place_futures_order, cleanup_all_orphaned_orders, recover_order_state_on_startup, start_orphan_watcher
 
 from trading_bot.send_bot_message import send_bot_message
 
@@ -526,6 +526,8 @@ if __name__ == "__main__":
 
     # Recover the order state on startup
     recover_order_state_on_startup()
+    # Start orphan watcher in a separate thread
+    start_orphan_watcher(interval_seconds=20)
 
     # # Start signal processing
     process_signal()

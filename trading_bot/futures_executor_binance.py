@@ -1,6 +1,7 @@
 import os
 import math
 import json
+import threading
 import time
 from dotenv import load_dotenv
 from binance.client import Client
@@ -431,3 +432,17 @@ def recover_order_state_on_startup():
                     logger.warning(f"Active position for {symbol} but no TP/SL found")
     except Exception as e:
         logger.error(f"State recovery failed: {e}")
+
+def start_orphan_watcher(interval_seconds=30):
+    """Run orphan cleanup every N seconds in background"""
+    def _watch():
+        while True:
+            try:
+                cleanup_all_orphaned_orders()
+            except Exception as e:
+                logger.error(f"Orphan watcher error: {e}")
+            time.sleep(interval_seconds)
+
+    watcher = threading.Thread(target=_watch, daemon=True)
+    watcher.start()
+    logger.info(f"Orphan watcher started (every {interval_seconds}s)")        
